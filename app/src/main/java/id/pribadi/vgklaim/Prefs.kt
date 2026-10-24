@@ -65,21 +65,58 @@ object Prefs {
         get() = s().getInt("lobby_min", 3)
         set(v) { s().edit().putInt("lobby_min", v).apply() }
 
-    private fun dayKey(): String =
-        "done_" + SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+    // Progres disimpan per HARI dan per ID AKUN. Catatan hari-hari lama dibuang otomatis.
+    private fun dayStamp(): String = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
 
-    fun doneToday(): MutableSet<String> {
-        val st = s().getStringSet(dayKey(), null) ?: return HashSet()
+    private fun dayKey(acct: String): String = "done_" + dayStamp() + "_" + acct
+
+    fun doneToday(acct: String = "-"): MutableSet<String> {
+        val st = s().getStringSet(dayKey(acct), null) ?: return HashSet()
         return HashSet(st)
     }
 
-    fun addDone(name: String) {
-        val cur = doneToday()
+    fun addDone(name: String, acct: String = "-") {
+        val cur = doneToday(acct)
         cur.add(name)
-        s().edit().putStringSet(dayKey(), cur).apply()
+        s().edit().putStringSet(dayKey(acct), cur).apply()
     }
 
+    fun removeDone(name: String, acct: String = "-") {
+        val cur = doneToday(acct)
+        cur.remove(name)
+        s().edit().putStringSet(dayKey(acct), cur).apply()
+    }
+
+    // Daftar ID akun yang sudah selesai semua servernya hari ini
+    fun accountsDoneToday(): MutableSet<String> {
+        val st = s().getStringSet("accts_" + dayStamp(), null) ?: return HashSet()
+        return HashSet(st)
+    }
+
+    fun markAccountDone(acct: String) {
+        val cur = accountsDoneToday()
+        cur.add(acct)
+        s().edit().putStringSet("accts_" + dayStamp(), cur).apply()
+    }
+
+    // Hapus catatan hari-hari sebelumnya (hanya hari ini yang disimpan)
+    fun purgeOld() {
+        val today = dayStamp()
+        val ed = s().edit()
+        for (k in s().all.keys) {
+            if (k.startsWith("done_") && !k.startsWith("done_" + today)) ed.remove(k)
+            if (k.startsWith("accts_") && k != "accts_" + today) ed.remove(k)
+        }
+        ed.apply()
+    }
+
+    // Hapus catatan hari ini untuk SEMUA akun
     fun resetDone() {
-        s().edit().remove(dayKey()).apply()
+        val today = dayStamp()
+        val ed = s().edit()
+        for (k in s().all.keys) {
+            if (k.startsWith("done_" + today) || k == "accts_" + today) ed.remove(k)
+        }
+        ed.apply()
     }
 }
