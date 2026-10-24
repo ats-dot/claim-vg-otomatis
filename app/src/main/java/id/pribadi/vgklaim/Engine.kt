@@ -34,6 +34,11 @@ object Engine {
     private val COIN_X = 0.773f
     private val COIN_Y = 0.537f
 
+    // Ikon petir (tab "Hadiah") di sisi kiri layar Event, persen layar dari screenshot.
+    // Posisinya hampir sama dengan ikon Event di lobby.
+    private val PETIR_X = 0.063f
+    private val PETIR_Y = 0.51f
+
     fun start(ctx: Context): String? {
         Prefs.init(ctx)
         if (running) return "Sudah berjalan"
@@ -591,11 +596,20 @@ object Engine {
     }
 
     private fun openEvent() {
-        for (a in 0 until 5) {
+        for (a in 0 until 6) {
             val s = cap()
             if (eventOpen(s)) return
             if (popups(s)) continue
-            val l = s.exact("event") ?: s.find("event")
+            if (!isLobby(s)) {
+                // Bukan lobby dan bukan halaman Hadiah: kemungkinan layar Event tab lain
+                // (mis. Festival Pemuda). Ketuk ikon petir untuk pindah ke tab Hadiah.
+                val p = Matcher.findPrefix(s, "petir")
+                if (p != null) tapXY(p.x, p.y, "tab Hadiah (template petir)")
+                else tapXY(s.w * PETIR_X, s.h * PETIR_Y, "tab Hadiah (posisi tetap)")
+                sleepS(1.5)
+                continue
+            }
+            val l = s.exact("event")
             if (l != null) {
                 tapLine(l, "Event")
                 sleepS(2.0)
@@ -607,9 +621,10 @@ object Engine {
                 sleepS(2.0)
                 continue
             }
-            sleepS(1.0)
+            tapXY(s.w * PETIR_X, s.h * PETIR_Y, "Event (posisi tetap)")
+            sleepS(2.0)
         }
-        throw Stop("Event tidak terbuka (tulisan 'Event' tidak ditemukan; buat template 'event')")
+        throw Stop("Halaman Hadiah di Event tidak terbuka (jalankan Diagnosa di layar Event)")
     }
 
     private fun openMenu(keys: List<String>): Scr? {
