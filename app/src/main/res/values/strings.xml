@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="svc_desc">Dipakai untuk mengetuk layar dan mengambil screenshot game saat klaim otomatis berjalan. Tidak membaca isi aplikasi lain dan tidak memakai internet.</string>
+</resources>
