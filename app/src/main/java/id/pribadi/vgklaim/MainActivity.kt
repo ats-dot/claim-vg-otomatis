@@ -173,6 +173,8 @@ class MainActivity : Activity() {
 
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
 
+    private fun pct(v: Float): String = String.format(java.util.Locale.US, "%.1f", v * 100f)
+
     private fun show(i: Int) {
         tab = i
         tvStatus = null
@@ -339,6 +341,29 @@ class MainActivity : Activity() {
             Prefs.lobbyMin = min.text.toString().trim().toIntOrNull() ?: 3
             toast("Tersimpan")
         }, lp(6))
+
+        val ax = edit("X (persen)", pct(Prefs.avatarX), false)
+        val ay = edit("Y (persen)", pct(Prefs.avatarY), false)
+        ax.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        ay.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        col.addView(
+            card(
+                tv("Posisi ketuk IKON PROFIL di lobby (persen layar, angka 0-100)", 12f, false, true),
+                tv("X = jarak dari kiri", 12f, false, true), ax,
+                tv("Y = jarak dari atas", 12f, false, true), ay
+            ), lp(16)
+        )
+        col.addView(btn("Simpan posisi ikon profil") {
+            val x = ax.text.toString().trim().replace(',', '.').toFloatOrNull()
+            val y = ay.text.toString().trim().replace(',', '.').toFloatOrNull()
+            if (x == null || y == null || x <= 0f || x >= 100f || y <= 0f || y >= 100f) {
+                toast("Isi angka antara 0 dan 100")
+                return@btn
+            }
+            Prefs.avatarX = x / 100f
+            Prefs.avatarY = y / 100f
+            toast("Tersimpan")
+        }, lp(6))
         col.addView(
             tv(
                 "Aplikasi ini tidak memiliki izin internet. Layanan Aksesibilitas hanya dipakai untuk screenshot dan ketukan " +
@@ -355,11 +380,13 @@ class MainActivity : Activity() {
         col.addView(tv("Templat gambar", 24f, true))
         col.addView(
             tv(
-                "Template dipakai untuk mengenali ikon yang tidak berupa tulisan. Dibutuhkan:\n" +
-                    "• avatar  = ikon profil di lobby (wajib untuk ganti server)\n" +
-                    "• x1, x2, ... = tombol tutup X pada popup (opsional)\n" +
-                    "• event = ikon Event, kalau tulisannya tidak terbaca (opsional)\n\n" +
-                    "Ambil screenshot game dari HP ini, lalu potong tombolnya di sini.",
+                "Template dipakai untuk mengenali ikon yang tidak berupa tulisan. Semuanya opsional:\n" +
+                    "• x1, x2, ... = tombol tutup X pada popup (nama berawalan x diketuk otomatis)\n" +
+                    "• event = ikon Event, hanya kalau tulisan Event tidak terbaca (jangan diawali x)\n" +
+                    "• avatar = cadangan ikon profil, hanya dipakai kalau posisi tetap di Setelan gagal\n\n" +
+                    "Nama hanya huruf kecil, angka, dan garis bawah. Tombol bertulisan (Klaim, OK, dll.) tidak perlu template.\n" +
+                    "Pilih gambar yang sudah dipotong (tanpa kotak seleksi) = seluruh gambar disimpan. " +
+                    "Atau pilih screenshot lalu kotaki bagiannya.",
                 13f, false, true
             ), lp()
         )
