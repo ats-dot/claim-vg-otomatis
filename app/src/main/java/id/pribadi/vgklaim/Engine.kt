@@ -29,6 +29,19 @@ object Engine {
     // Nomor "Katelvira N" sengaja tidak dipakai (bisa salah ketik).
     private val SRV = Regex("s[0-9]{4,6}")
     private var flip = 0
+    private var acct: String = "-"
+    private var firstPending = false
+    private var lastClaimed: String? = null
+
+    // Ambang pembacaan warna koin x20 (jumlah piksel); lihat log "Koin x20: emas=..., titik merah=..."
+    // Diuji pada screenshot: belum/siap = 15.000-18.000 piksel emas, sudah diklaim = ~2.500 (hanya lencana centang);
+    // titik merah koin siap = ~69 piksel, selain itu 0.
+    private val GOLD_MIN = 7000
+    private val RED_MIN = 25
+    private var lastXx = -999f
+    private var lastXy = -999f
+    private var xRepeat = 0
+    private var xBlockUntil = 0L
 
     // Posisi koin x20 di halaman Masukan Advance Server (persen layar). Perkiraan dari screenshot.
     private val COIN_X = 0.773f
@@ -127,7 +140,7 @@ object Engine {
             val bmp = svc.shot()
             if (bmp != null) return Scr(bmp, Ocr.read(bmp))
             tries++
-            if (tries >= 6) throw Stop("Screenshot terus gagal (layar mati / izin belum diberikan?)")
+            if (tries >= 15) throw Stop("Screenshot terus gagal (layar mati / izin belum diberikan?)")
             sleepS(1.0)
         }
     }
@@ -196,6 +209,46 @@ object Engine {
         return m?.groupValues?.get(1)
     }
 
+    private fun setAccount(id: String, from: String) {
+        if (id == acct) return
+        acct = id
+        done.clear()
+        done.addAll(Prefs.doneToday(acct))
+        refreshCount()
+        log("Akun terbaca dari " + from + ": ID " + acct + " (server selesai hari ini: " + done.size + ")")
+    }
+
+    // Layar Profil menulis "ID: 2281758175 (57102)" -> (ID akun, kode server saat ini)
+    private fun parseProfile(s: Scr): Pair<String, String>? {
+        val re = Regex("([0-9]{6,12})\\s*\\(\\s*([0-9]{4,6})\\s*\\)")
+        for (l in s.lines) {
+            val m = re.find(l.text) ?: continue
+            return Pair(m.groupValues[1], "s" + m.groupValues[2])
+        }
+        return null
+    }
+
+    private fun readProfileInfo(s: Scr) {
+        val p = parseProfile(s) ?: return
+        setAccount(p.first, "Profil")
+        val lc = lastClaimed
+        if (lc != null && lc != p.second) {
+            log("Peringatan: server di Profil " + p.second + " tidak sama dengan yang baru diklaim (" + lc + "). Pergantian server mungkin gagal, " + lc + " dicatat belum selesai.")
+            done.remove(lc)
+            Prefs.removeDone(lc, acct)
+            refreshCount()
+        }
+        lastClaimed = null
+        cur = p.second
+    }
+
+    // Cadangan: "Account ID: ..." di layar Pengaturan Akun
+    private fun readAccountId(s: Scr) {
+        if (acct != "-") return
+        val m = Regex("accountid([0-9]{6,12})").find(s.all) ?: return
+        setAccount(m.groupValues[1], "Pengaturan Akun")
+    }
+
     private fun isAccount(s: Scr): Boolean = s.has("pusatakun", "gantiakun", "pengaturanakun")
 
     private fun isProfile(s: Scr): Boolean =
@@ -207,17 +260,33 @@ object Engine {
         tapXY(s.w * x, s.h * 0.045f, "panah kembali")
     }
 
+    // Ketuk template X, tapi berhenti kalau X yang sama diketuk berulang tanpa hasil
+    private fun tapX(s: Scr): Boolean {
+        if (now() < xBlockUntil) return false
+        val x = Matcher.findPrefix(s, "x") ?: return false
+        if (Math.abs(x.x - lastXx) < 40f && Math.abs(x.y - lastXy) < 40f) xRepeat++
+        else {
+            xRepeat = 0
+            lastXx = x.x
+            lastXy = x.y
+        }
+        if (xRepeat >= 2) {
+            xBlockUntil = now() + 60000L
+            xRepeat = 0
+            log("Template X cocok di titik yang sama berulang kali tanpa menutup apa pun. X diabaikan 60 detik (template X mungkin terlalu longgar, potong ulang lebih rapat).")
+            return false
+        }
+        tapXY(x.x, x.y, "tutup X")
+        return true
+    }
+
     private fun popups(s: Scr): Boolean {
         if (s.has("bonuslogin") && !eventOpen(s) && !isLobby(s)) {
             log("Layar Bonus Login 9 Hari muncul, ditutup tanpa klaim")
-            if (flip++ % 2 == 0) back() else tapArrow(s)
+            if (flip++ % 2 == 0) tapArrow(s) else back()
             return true
         }
-        val x = Matcher.findPrefix(s, "x")
-        if (x != null) {
-            tapXY(x.x, x.y, "tutup X")
-            return true
-        }
+        if (tapX(s)) return true
         for (k in listOf("ketukuntukmelanjutkan", "ketukuntuk")) {
             val l = s.find(k)
             if (l != null) {
@@ -246,14 +315,18 @@ object Engine {
         val t0 = now()
         var okCount = 0
         var relaunched = 0
+        var quietLogged = false
+        var loadLogged = false
+        val quietMs = 15_000L
         while (now() - t0 < maxSec * 1000L) {
             val s = cap()
             lastActive = now()
-            if (s.has("sayatelahmembaca", "persyaratandankebijakanprivasi")) {
-                val a = s.find("sayatelahmembaca")
-                if (a != null) tapLine(a, "setuju syarat")
-                val m = s.exact("masuk")
-                if (m != null) tapLine(m, "Masuk")
+            val elapsed = now() - t0
+            if (elapsed > (relaunched + 1) * 100_000L && relaunched < 2) {
+                relaunched++
+                log("Lobby belum muncul, membuka game lagi (" + relaunched + "/2)")
+                launch()
+                sleepS(5.0)
                 continue
             }
             if (isLobby(s) && !eventOpen(s) && !isServerList(s)) {
@@ -266,21 +339,25 @@ object Engine {
                 continue
             }
             okCount = 0
-            if (s.has("memuatgame")) {
-                log("Game sedang memuat...")
+            // Layar loading ("Memuat Game..." + tulisan persyaratan di bawahnya): jangan diketuk
+            if (s.has("memuatgame", "sayatelahmembaca")) {
+                if (!loadLogged) {
+                    log("Game sedang memuat (tidak mengetuk apa pun)")
+                    loadLogged = true
+                }
                 sleepS(2.0)
                 continue
             }
-            if (!popups(s)) {
+            if (elapsed < quietMs) {
+                // 15 detik pertama: game masih memuat, jangan mengetuk apa pun
+                if (!quietLogged) {
+                    log("Game sedang loading, menunggu (tidak mengetuk apa pun)")
+                    quietLogged = true
+                }
+                sleepS(1.5)
+            } else if (!popups(s)) {
                 log("Menunggu layar dikenali...")
                 sleepS(1.5)
-            }
-            val elapsed = now() - t0
-            if (elapsed > (relaunched + 1) * 100_000L && relaunched < 2) {
-                relaunched++
-                log("Lobby belum muncul, membuka game lagi (" + relaunched + "/2)")
-                launch()
-                sleepS(5.0)
             }
         }
         throw Stop("Lobby tidak terdeteksi (cek kata kunci lobby di Setelan, jalankan Diagnosa)")
@@ -302,10 +379,9 @@ object Engine {
         for (i in 0 until 12) {
             val s = cap()
             if (isLobby(s) && !eventOpen(s) && !isServerList(s)) return
-            val x = Matcher.findPrefix(s, "x")
-            if (x != null && !isServerList(s)) {
-                tapXY(x.x, x.y, "tutup X")
-            } else if (i % 2 == 1 && (eventOpen(s) || isAccount(s) || isProfile(s) || isServerList(s))) {
+            if (!isServerList(s) && tapX(s)) {
+                // X sudah diketuk
+            } else if (i % 2 == 0 && (eventOpen(s) || isAccount(s) || isProfile(s) || isServerList(s))) {
                 tapArrow(s)
             } else {
                 back()
@@ -384,11 +460,30 @@ object Engine {
         sleepS(0.8)
     }
 
-    private fun scrollList(s: Scr, forward: Boolean) {
+    private fun scrollList(s: Scr, forward: Boolean, frac: Float = 0.26f) {
         val x = s.w * 0.5f
         val a = s.h * 0.62f
-        val b = s.h * 0.36f
+        val b = s.h * (0.62f - frac)
         if (forward) slowSwipe(x, a, x, b) else slowSwipe(x, b, x, a)
+    }
+
+    // Geser daftar. Kalau tidak ada satu pun server yang sama antara sebelum dan sesudah
+    // geser, berarti ada baris yang terlewat: geser balik lalu coba lagi dengan jarak lebih pendek.
+    private fun scrollSafe(s: Scr, forward: Boolean): Scr {
+        var cur = s
+        var frac = 0.26f
+        for (attempt in 0 until 3) {
+            val before = serverNums(cur).keys.toSet()
+            scrollList(cur, forward, frac)
+            val n = cap()
+            val after = serverNums(n).keys
+            if (before.isEmpty() || after.isEmpty() || before.any { it in after }) return n
+            log("Tarikan terlalu jauh (baris terlewat), kembali dan tarik lebih pendek")
+            scrollList(n, !forward, frac)
+            cur = cap()
+            frac *= 0.6f
+        }
+        return cur
     }
 
     private fun sig(s: Scr): String = serverNums(s).keys.joinToString(",")
@@ -401,8 +496,7 @@ object Engine {
             val g = sig(s)
             if (g == last) break
             last = g
-            scrollList(s, false)
-            s = cap()
+            s = scrollSafe(s, false)
         }
         return s
     }
@@ -427,6 +521,7 @@ object Engine {
             var s = cap()
             if (isServerList(s)) return s
             if (isAccount(s)) {
+                readAccountId(s)
                 val gs = s.exact("gantiserver") ?: s.find("gantiserver")
                 if (gs != null) {
                     tapLine(gs, "Ganti Server")
@@ -438,6 +533,7 @@ object Engine {
                 continue
             }
             if (isProfile(s)) {
+                readProfileInfo(s)
                 val ak = s.exact("akun")
                 if (ak != null) {
                     tapLine(ak, "Akun")
@@ -455,7 +551,7 @@ object Engine {
                         unknown = 0
                         back()
                     } else {
-                        log("Layar belum dikenali, menunggu")
+                        log("Layar belum dikenali, menunggu. Teks terbaca: " + s.all.take(160))
                         sleepS(1.2)
                     }
                 }
@@ -472,7 +568,7 @@ object Engine {
             val px = s.w * Prefs.avatarX
             val py = s.h * Prefs.avatarY
             log("Setelah mengetuk ikon profil, layar BUKAN menu Profil/Akun. Titik ketuk: " +
-                px.toInt() + "," + py.toInt() + " px dari layar " + s.w + "x" + s.h + ".")
+                px.toInt() + "," + py.toInt() + " px dari layar " + s.w + "x" + s.h + ". Teks terbaca: " + s.all.take(160))
             if (avatarFails >= 2) {
                 throw Stop("Ikon profil tidak membuka menu Profil/Akun. Jalankan Diagnosa di lobby, lalu ubah angka X/Y ikon profil di tab Setelan.")
             }
@@ -497,8 +593,7 @@ object Engine {
                 stagn++
                 if (stagn >= 2) break
             } else stagn = 0
-            scrollList(s, true)
-            s = cap()
+            s = scrollSafe(s, true)
         }
         log("Server terbaca: " + order.size + " (" + order.joinToString(",") + ")")
     }
@@ -523,8 +618,7 @@ object Engine {
                 if (stagn >= 2) break
             } else stagn = 0
             lastSig = sig
-            scrollList(s, true)
-            s = cap()
+            s = scrollSafe(s, true)
         }
         return null
     }
@@ -550,8 +644,7 @@ object Engine {
                     if (stagn >= 2) break
                 } else stagn = 0
                 lastSig = sig
-                scrollList(s, pass == 0)
-                s = cap()
+                s = scrollSafe(s, pass == 0)
             }
             if (found != null) break
         }
@@ -578,6 +671,11 @@ object Engine {
                 if (b != null) {
                     tapLine(b, "OK (server telah diganti)")
                     sleepS(1.0)
+                    val s2 = cap()
+                    if (s2.has("pemberitahuansistem", "servertelahdiganti")) {
+                        val b2 = s2.exact("ok")
+                        if (b2 != null) tapLine(b2, "OK diulang (popup masih terlihat)")
+                    }
                     return
                 }
             }
@@ -604,9 +702,18 @@ object Engine {
                 // Bukan lobby dan bukan halaman Hadiah: kemungkinan layar Event tab lain
                 // (mis. Festival Pemuda). Ketuk ikon petir untuk pindah ke tab Hadiah.
                 val p = Matcher.findPrefix(s, "petir")
-                if (p != null) tapXY(p.x, p.y, "tab Hadiah (template petir)")
-                else tapXY(s.w * PETIR_X, s.h * PETIR_Y, "tab Hadiah (posisi tetap)")
-                sleepS(1.5)
+                if (p != null) {
+                    tapXY(p.x, p.y, "tab Hadiah (template petir)")
+                    sleepS(1.5)
+                    continue
+                }
+                // Tanpa template: posisi ikon petir berpindah-pindah, jadi coba ikon tab
+                // di sisi kiri satu per satu sampai halaman Hadiah terbuka.
+                for (yy in listOf(PETIR_Y, 0.347f, 0.671f, 0.185f)) {
+                    tapXY(s.w * PETIR_X, s.h * yy, "ikon tab kiri y=" + (yy * 100).toInt() + "% (cari tab Hadiah)")
+                    sleepS(1.5)
+                    if (eventOpen(cap())) return
+                }
                 continue
             }
             val l = s.exact("event")
@@ -672,13 +779,11 @@ object Engine {
             if (now() - serverT0 > 15 * 60_000L) throw Stop("Server ini terlalu lama (>15 menit)")
             val s = cap()
             val l = s.exact("klaimsemua") ?: s.find("klaimsemua") ?: s.exactAll("klaim").firstOrNull()
-            if (l == null) {
-                idle++
-                if (idle >= 2) break
-                sleepS(0.8)
-                continue
+            if (s.has("sudahdiklaim")) {
+                log(label + ": sudah diklaim")
+                break
             }
-            idle = 0
+            if (l == null) break
             tapLine(l, "Klaim (" + label + ")")
             claimed++
             lastActive = now()
@@ -698,42 +803,127 @@ object Engine {
     private val menuUpdate = listOf("hadiahpembaruan", "hadiahpembaharuan", "pembaruan", "pembaharuan")
     private val menuFeedback = listOf("masukanadvanceserver", "masukanadvance", "masukan")
 
-    private fun claimEvents() {
-        openEvent()
-
-        if (openMenu(menuSupply) != null) {
-            val n = claimLoop("Vanguard Coin Supply", 4)
-            log("Vanguard Coin Supply selesai (" + n + " ketukan klaim)")
-        } else log("Menu Vanguard Coin Supply tidak ada, lanjut")
-
-        if (openMenu(menuUpdate) != null) {
-            val n = claimLoop("Hadiah Pembaruan", 3)
-            log("Hadiah Pembaruan selesai (" + n + " ketukan klaim)")
-        } else log("Menu Hadiah Pembaruan tidak ada, lanjut")
-
-        if (openMenu(menuFeedback) != null) {
+    // Cari menu: baca layar, geser turun SEKALI, baca lagi. Tidak geser naik.
+    private fun openMenuQuick(keys: List<String>): Scr? {
+        for (i in 0 until 2) {
             val s = cap()
+            for (k in keys) {
+                val l = s.find(k)
+                if (l != null) {
+                    tapLine(l, "menu " + k)
+                    sleepS(1.2)
+                    return cap()
+                }
+            }
+            if (i == 0) {
+                val x = s.w * 0.15f
+                swipe(x, s.h * 0.75f, x, s.h * 0.30f)
+            }
+        }
+        return null
+    }
+
+    private fun countPx(s: Scr, fx0: Float, fy0: Float, fx1: Float, fy1: Float, pred: (Int, Int, Int) -> Boolean): Int {
+        val x0 = (s.w * fx0).toInt()
+        val y0 = (s.h * fy0).toInt()
+        val rw = (s.w * fx1).toInt() - x0
+        val rh = (s.h * fy1).toInt() - y0
+        if (rw <= 0 || rh <= 0) return 0
+        val px = IntArray(rw * rh)
+        s.bmp.getPixels(px, 0, rw, x0, y0, rw, rh)
+        var n = 0
+        for (c in px) {
+            val r = (c shr 16) and 255
+            val g = (c shr 8) and 255
+            val b = c and 255
+            if (pred(r, g, b)) n++
+        }
+        return n
+    }
+
+    // Piksel emas di bintang koin x20 (abu-abu = sudah diklaim)
+    private fun coinGold(s: Scr): Int =
+        countPx(s, 0.715f, 0.43f, 0.83f, 0.65f) { r, g, b -> r > 200 && g > 140 && b < 110 && r - b > 100 }
+
+    // Titik merah kecil di pojok kanan atas koin (siap diklaim)
+    private fun coinRed(s: Scr): Int =
+        countPx(s, 0.80f, 0.42f, 0.84f, 0.47f) { r, g, b -> r > 215 && g < 75 && b > 40 && b < 130 }
+
+    private fun claimCoin() {
+        var s = cap()
+        val onPage = s.has("masukanadvanceserver", "berikanmasukan")
+        val gold = coinGold(s)
+        val red = coinRed(s)
+        log("Koin x20: emas=" + gold + ", titik merah=" + red + (if (onPage) "" else " (halaman belum terbaca)"))
+        var needPergi = true
+        if (onPage && red >= RED_MIN) {
+            needPergi = false
+            log("Koin x20 siap diklaim, Pergi dilewati")
+        } else if (onPage && gold < GOLD_MIN) {
+            log("Koin x20 abu-abu: sudah diklaim, dilewati")
+            return
+        }
+        if (needPergi) {
             val g = s.exact("pergi")
             if (g != null) {
                 tapLine(g, "Pergi")
-                sleepS(3.0)
+                // Begitu halaman Pusat Bantuan terbaca, langsung kembali
+                var seen = false
+                val t0 = now()
+                while (now() - t0 < 5000L) {
+                    val sp = cap()
+                    if (sp.has("pusatbantuan")) {
+                        seen = true
+                        break
+                    }
+                }
+                log(if (seen) "Pusat Bantuan terbaca, kembali" else "Pusat Bantuan tidak terbaca, tetap kembali")
                 back()
-                sleepS(1.5)
+                sleepS(0.8)
                 val s2 = cap()
                 if (!eventOpen(s2)) {
                     log("Kembali dari Pergi, membuka Event lagi")
                     openEvent()
                     openMenu(menuFeedback)
                 }
+            } else {
+                log("Tombol Pergi tidak terbaca")
             }
-            val s3 = cap()
-            if (eventOpen(s3)) {
-                tapXY(s3.w * COIN_X, s3.h * COIN_Y, "koin x20")
-                sleepS(1.0)
-                waitOk()
+        }
+        // Tunggu titik merah muncul (siap diklaim), lalu ketuk koin
+        var ready = false
+        for (k in 0 until 3) {
+            s = cap()
+            if (!eventOpen(s)) break
+            if (coinRed(s) >= RED_MIN) {
+                ready = true
+                break
             }
-            val n = claimLoop("Koin x20", 2)
-            log("Masukan Advance Server selesai (" + n + " ketukan klaim)")
+            sleepS(0.4)
+        }
+        if (eventOpen(s)) {
+            tapXY(s.w * COIN_X, s.h * COIN_Y, if (ready) "koin x20" else "koin x20 (titik merah belum terlihat)")
+            sleepS(1.0)
+            waitOk()
+        }
+    }
+
+    private fun claimEvents() {
+        openEvent()
+
+        if (openMenu(menuSupply) != null) {
+            val n = claimLoop("Vanguard Coin Supply", 3)
+            log("Vanguard Coin Supply selesai (" + n + " ketukan klaim)")
+        } else log("Menu Vanguard Coin Supply tidak ada, lanjut")
+
+        if (openMenuQuick(menuUpdate) != null) {
+            val n = claimLoop("Hadiah Pembaruan", 3)
+            log("Hadiah Pembaruan selesai (" + n + " ketukan klaim)")
+        } else log("Menu Hadiah Pembaruan tidak ada, lanjut")
+
+        if (openMenu(menuFeedback) != null) {
+            claimCoin()
+            log("Masukan Advance Server selesai")
         } else log("Menu Masukan Advance Server tidak ada, lanjut")
 
         backToLobby()
@@ -754,7 +944,8 @@ object Engine {
         log("===== SERVER " + name + " =====")
         claimEvents()
         done.add(name)
-        Prefs.addDone(name)
+        Prefs.addDone(name, acct)
+        lastClaimed = name
         refreshCount()
         log("Server " + name + " selesai. Progres " + doneCount + "/" + total)
     }
@@ -766,7 +957,10 @@ object Engine {
         skipped.clear()
         order.clear()
         cur = null
-        done.addAll(Prefs.doneToday())
+        acct = "-"
+        lastClaimed = null
+        firstPending = false
+        Prefs.purgeOld()
         refreshCount()
 
         status = "Membuka game"
@@ -776,50 +970,72 @@ object Engine {
         awaitLobby(240)
         settleLobby()
 
-        status = "Membaca daftar server"
+        // 1) Klaim server tempat game berada sekarang (ID akun belum diketahui)
+        status = "Klaim server awal"
+        serverT0 = now()
+        log("===== SERVER AWAL =====")
+        claimEvents()
+        firstPending = true
+
+        // 2) Profil (baca ID + server saat ini) -> Akun -> Ganti Server -> daftar
+        status = "Membaca akun dan daftar server"
         val ls = openServerList()
-        cur = readCurrent(ls)
+        if (acct == "-") log("Peringatan: ID akun tidak terbaca, progres disimpan tanpa ID akun")
+        if (cur == null) cur = readCurrent(ls)
+        if (firstPending) {
+            firstPending = false
+            val c = cur
+            if (c != null) {
+                done.add(c)
+                Prefs.addDone(c, acct)
+                log("Server awal " + c + " dicatat selesai")
+            } else {
+                log("Peringatan: kode server awal tidak terbaca, tidak dicatat")
+            }
+            refreshCount()
+        }
+
         val want = Prefs.serverCount
         if (!Prefs.fast || want <= 0) {
             readAll(ls)
         }
-        total = if (want > 0) want else (order.size + (if (cur != null && !order.contains(cur!!)) 1 else 0))
+        val c0 = cur
+        total = if (want > 0) want else (order.size + (if (c0 != null && !order.contains(c0)) 1 else 0))
         if (want > 0 && order.isNotEmpty() && order.size != want) {
             log("Peringatan: pengaturan " + want + " server, terbaca " + order.size + ". Dilanjutkan.")
         }
-        if (Prefs.skipAbove && order.isNotEmpty() && cur != null) {
-            val i = order.indexOf(cur!!)
+        if (Prefs.skipAbove && order.isNotEmpty() && c0 != null) {
+            val i = order.indexOf(c0)
             if (i > 0) {
                 for (k in 0 until i) skipped.add(order[k])
                 log("Server di atas posisi sekarang dilewati: " + i)
             }
         }
         refreshCount()
-        log("Server sekarang: " + (cur ?: "tidak terbaca") + ", total " + total)
-        backToLobby()
+        log("Server sekarang: " + (cur ?: "tidak terbaca") + ", total " + total + ", sudah selesai " + doneCount)
 
+        // 3) Pindah server satu per satu
         var guard = 0
         while (true) {
             alive()
-            val c = cur
-            if (c == null) {
-                claimServer("saat-ini")
-            } else if (!isDone(c)) {
-                claimServer(c)
-            }
             if (total > 0 && doneCount >= total) break
             val next = pickNext()
             if (next == null) {
                 log("Tidak ada server berikutnya")
-                backToLobby()
                 break
             }
             switchTo(next)
             cur = next
+            claimServer(next)
             guard++
             if (guard > 80) throw Stop("Terlalu banyak server")
         }
-        if (Prefs.closeGame) closeApp()
+        if (total > 0 && Prefs.doneToday(acct).size >= total) {
+            Prefs.markAccountDone(acct)
+            log("Akun " + acct + " selesai semua. Akun yang selesai hari ini: " +
+                Prefs.accountsDoneToday().joinToString(", "))
+        }
+        if (Prefs.closeGame) closeApp() else backToLobby()
     }
 
     fun diagnose(ctx: Context) {
@@ -852,9 +1068,12 @@ object Engine {
                 log("DIAGNOSA: titik ketuk ikon profil = " + (s.w * Prefs.avatarX).toInt() + "," + (s.h * Prefs.avatarY).toInt() +
                     " px (" + ((Prefs.avatarX * 1000).toInt() / 10f) + "%," + ((Prefs.avatarY * 1000).toInt() / 10f) + "%) dari layar " + s.w + "x" + s.h)
                 log("DIAGNOSA: server saat ini=" + readCurrent(s) + " ; server terbaca=" + serverNums(s).keys.joinToString(","))
+                val pp = parseProfile(s)
+                log("DIAGNOSA: profil ID=" + (pp?.first ?: "-") + " server=" + (pp?.second ?: "-"))
+                log("DIAGNOSA: koin x20 emas=" + coinGold(s) + " titikMerah=" + coinRed(s) + " (hanya berarti di halaman Masukan Advance Server)")
                 for (n in Matcher.names(ctx)) {
                     val h = Matcher.find(s, n)
-                    log("  template " + n + ": " + (if (h == null) "tidak cocok" else "cocok " + (h.score * 100).toInt() + "%"))
+                    log("  template " + n + ": " + (if (h == null) "tidak cocok" else "cocok " + (h.score * 100).toInt() + "% di titik " + h.x.toInt() + "," + h.y.toInt()))
                 }
                 log("DIAGNOSA selesai. Salin log di tab Log dan kirim ke Claude.")
             } catch (e: Throwable) {
