@@ -47,9 +47,19 @@ object Prefs {
         get() = s().getString("pkg", "") ?: ""
         set(v) { s().edit().putString("pkg", v).apply() }
 
+    // Nama kunci diganti (lobby_keys2) supaya nilai awal yang baru langsung dipakai
     var lobbyKeys: String
-        get() = s().getString("lobby_keys", "bertarung,klasik,brawl,rank,hero,toko,event,koleksi") ?: ""
-        set(v) { s().edit().putString("lobby_keys", v).apply() }
+        get() = s().getString("lobby_keys2", "persiapan,inventori,toko,event,classic,hero") ?: ""
+        set(v) { s().edit().putString("lobby_keys2", v).apply() }
+
+    // Posisi ketuk ikon profil di lobby, pecahan 0..1 dari lebar/tinggi layar
+    var avatarX: Float
+        get() = s().getFloat("avatar_x", 0.06f)
+        set(v) { s().edit().putFloat("avatar_x", v).apply() }
+
+    var avatarY: Float
+        get() = s().getFloat("avatar_y", 0.056f)
+        set(v) { s().edit().putFloat("avatar_y", v).apply() }
 
     var lobbyMin: Int
         get() = s().getInt("lobby_min", 3)
