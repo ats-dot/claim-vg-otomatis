@@ -41,9 +41,9 @@ class TemplateActivity : Activity() {
         val info = TextView(this)
         info.setTextColor(Color.WHITE)
         info.textSize = 13f
-        info.text = "1) Pilih screenshot game (screenshot asli dari HP ini).\n" +
-            "2) Geser jari di gambar untuk mengotaki tombol/ikon.\n" +
-            "3) Isi nama lalu Simpan. Nama: avatar, event, x1, x2, ... (yang diawali huruf x dipakai sebagai tombol tutup)."
+        info.text = "1) Pilih gambar: screenshot game, atau gambar yang sudah kamu potong sendiri di galeri.\n" +
+            "2) Kalau screenshot, geser jari di gambar untuk mengotaki ikon. Kalau gambar sudah dipotong, tidak perlu dikotaki: seluruh gambar disimpan.\n" +
+            "3) Isi nama lalu Simpan. Nama: x1, x2, ... (berawalan x = tombol tutup, diketuk otomatis). Boleh juga event (jangan diawali x). Huruf kecil, angka, garis bawah."
         root.addView(info)
 
         val row = LinearLayout(this)
@@ -60,7 +60,7 @@ class TemplateActivity : Activity() {
         name = EditText(this)
         name.setTextColor(Color.WHITE)
         name.setHintTextColor(Color.GRAY)
-        name.hint = "nama template (mis. avatar)"
+        name.hint = "nama template (mis. x1)"
         name.inputType = InputType.TYPE_CLASS_TEXT
         root.addView(name)
 
@@ -109,7 +109,7 @@ class TemplateActivity : Activity() {
         }
         val c = sel.crop()
         if (c == null) {
-            toast("Kotaki bagian gambar dulu (minimal 16x16 piksel)")
+            toast("Gambar terlalu kecil (minimal 16x16 piksel)")
             return
         }
         val f = File(Matcher.dir(this), n + ".png")
@@ -181,7 +181,7 @@ class TemplateActivity : Activity() {
 
         fun crop(): Bitmap? {
             val b = bmp ?: return null
-            if (!has) return null
+            if (!has) return if (b.width >= 16 && b.height >= 16) b else null
             val x1 = ((minOf(sx, ex) - ox) / scale).toInt().coerceIn(0, b.width - 1)
             val y1 = ((minOf(sy, ey) - oy) / scale).toInt().coerceIn(0, b.height - 1)
             val x2 = ((maxOf(sx, ex) - ox) / scale).toInt().coerceIn(1, b.width)
