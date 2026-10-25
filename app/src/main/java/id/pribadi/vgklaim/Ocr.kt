@@ -2,10 +2,13 @@ package id.pribadi.vgklaim
 
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Process
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class Line(val text: String, val norm: String, val r: Rect) {
@@ -38,6 +41,27 @@ class Scr(val bmp: Bitmap, val lines: List<Line>) {
 
 object Ocr {
     private val rec by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+
+    // Mode prioritas: OCR dijalankan di thread buatan kita dengan prioritas tinggi
+    @Volatile
+    var useFast = false
+
+    private val recFast: TextRecognizer by lazy {
+        val ex = Executors.newFixedThreadPool(2) { r ->
+            val t = Thread({
+                try {
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY)
+                } catch (_: Throwable) {
+                }
+                r.run()
+            }, "ocr-cepat")
+            t.isDaemon = true
+            t
+        }
+        TextRecognition.getClient(TextRecognizerOptions.Builder().setExecutor(ex).build())
+    }
+
+    private fun recognizer(): TextRecognizer = if (useFast) recFast else rec
 
     fun norm(s: String): String {
         val sb = StringBuilder()
@@ -73,7 +97,7 @@ object Ocr {
                 src = base
                 f = 1f
             }
-            val t = Tasks.await(rec.process(InputImage.fromBitmap(src, 0)), 6, TimeUnit.SECONDS)
+            val t = Tasks.await(recognizer().process(InputImage.fromBitmap(src, 0)), 6, TimeUnit.SECONDS)
             val out = ArrayList<Line>()
             for (b in t.textBlocks) {
                 for (l in b.lines) {
