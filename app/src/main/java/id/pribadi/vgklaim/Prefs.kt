@@ -61,6 +61,11 @@ object Prefs {
         get() = s().getFloat("avatar_y", 0.056f)
         set(v) { s().edit().putFloat("avatar_y", v).apply() }
 
+    // Skala gambar saat OCR (persen). Makin kecil makin cepat, tapi tulisan kecil bisa tidak terbaca.
+    var ocrScale: Int
+        get() = s().getInt("ocr_scale", 60)
+        set(v) { s().edit().putInt("ocr_scale", v).apply() }
+
     var lobbyMin: Int
         get() = s().getInt("lobby_min", 3)
         set(v) { s().edit().putInt("lobby_min", v).apply() }
