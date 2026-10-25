@@ -29,6 +29,9 @@ object Engine {
     // Nomor "Katelvira N" sengaja tidak dipakai (bisa salah ketik).
     private val SRV = Regex("s[0-9]{4,6}")
     private var flip = 0
+    private var capN = 0
+    private var capShotMs = 0L
+    private var capOcrMs = 0L
     private var acct: String = "-"
     private var firstPending = false
     private var lastClaimed: String? = null
@@ -38,6 +41,7 @@ object Engine {
     // titik merah koin siap = ~69 piksel, selain itu 0.
     private val GOLD_MIN = 7000
     private val RED_MIN = 25
+    private val GRAY_MIN = 10000
     private var lastXx = -999f
     private var lastXy = -999f
     private var xRepeat = 0
@@ -137,12 +141,42 @@ object Engine {
             val gap = 380 - (now() - lastShot)
             if (gap > 0) sleepMs(gap)
             lastShot = now()
+            val t1 = now()
             val bmp = svc.shot()
-            if (bmp != null) return Scr(bmp, Ocr.read(bmp))
+            val t2 = now()
+            if (bmp != null) {
+                var lines = Ocr.read(bmp)
+                if (lines == null) {
+                    log("OCR gagal, mencoba lagi")
+                    lines = Ocr.read(bmp)
+                }
+                val t3 = now()
+                capN++
+                capShotMs += t2 - t1
+                capOcrMs += t3 - t2
+                if (t3 - t1 > 3000L) {
+                    log("Baca layar lambat: " + (t3 - t1) + " ms (screenshot " + (t2 - t1) + ", OCR " + (t3 - t2) + ")")
+                }
+                return Scr(bmp, lines ?: emptyList())
+            }
             tries++
             if (tries >= 15) throw Stop("Screenshot terus gagal (layar mati / izin belum diberikan?)")
             sleepS(1.0)
         }
+    }
+
+    private fun resetStats() {
+        capN = 0
+        capShotMs = 0L
+        capOcrMs = 0L
+    }
+
+    private fun statLine(): String {
+        val n = if (capN == 0) 1 else capN
+        val rt = Runtime.getRuntime()
+        val used = (rt.totalMemory() - rt.freeMemory()) / 1048576L
+        return "baca layar rata-rata " + ((capShotMs + capOcrMs) / n) + " ms (screenshot " + (capShotMs / n) +
+            ", OCR " + (capOcrMs / n) + ") x " + capN + " kali, memori " + used + "/" + (rt.maxMemory() / 1048576L) + " MB"
     }
 
     private fun tapXY(x: Float, y: Float, why: String) {
@@ -771,13 +805,13 @@ object Engine {
         return false
     }
 
-    private fun claimLoop(label: String, maxRounds: Int): Int {
+    private fun claimLoop(label: String, maxRounds: Int, first: Scr? = null): Int {
         var claimed = 0
         var idle = 0
         var noPopup = 0
         for (round in 0 until maxRounds) {
             if (now() - serverT0 > 15 * 60_000L) throw Stop("Server ini terlalu lama (>15 menit)")
-            val s = cap()
+            val s = if (round == 0 && first != null) first else cap()
             val l = s.exact("klaimsemua") ?: s.find("klaimsemua") ?: s.exactAll("klaim").firstOrNull()
             if (s.has("sudahdiklaim")) {
                 log(label + ": sudah diklaim")
@@ -849,19 +883,42 @@ object Engine {
     private fun coinRed(s: Scr): Int =
         countPx(s, 0.80f, 0.42f, 0.84f, 0.47f) { r, g, b -> r > 215 && g < 75 && b > 40 && b < 130 }
 
-    private fun claimCoin() {
-        var s = cap()
-        val onPage = s.has("masukanadvanceserver", "berikanmasukan")
-        val gold = coinGold(s)
-        val red = coinRed(s)
-        log("Koin x20: emas=" + gold + ", titik merah=" + red + (if (onPage) "" else " (halaman belum terbaca)"))
+    // Piksel abu-abu di koin (koin yang sudah diklaim berwarna abu-abu)
+    private fun coinGray(s: Scr): Int =
+        countPx(s, 0.715f, 0.43f, 0.83f, 0.65f) { r, g, b ->
+            val mx = maxOf(r, maxOf(g, b))
+            val mn = minOf(r, minOf(g, b))
+            mx - mn < 35 && mx > 80 && mx < 210
+        }
+
+    private fun claimCoin(first: Scr) {
+        var s = first
+        var gold = 0
+        var red = 0
+        var gray = 0
+        var panel = false
+        // Tunggu sampai halaman kanan dan koin tergambar (maksimal 3 kali baca)
+        for (k in 0 until 3) {
+            panel = s.has("berikanmasukan", "menemukanbug", "pengalamanburuk")
+            gold = coinGold(s)
+            red = coinRed(s)
+            gray = coinGray(s)
+            if (panel && (gold >= GOLD_MIN || gray >= GRAY_MIN)) break
+            if (k < 2) {
+                sleepS(0.4)
+                s = cap()
+            }
+        }
+        log("Koin x20: emas=" + gold + ", abu=" + gray + ", titik merah=" + red + (if (panel) "" else " (halaman kanan belum terbaca)"))
         var needPergi = true
-        if (onPage && red >= RED_MIN) {
+        if (panel && red >= RED_MIN) {
             needPergi = false
             log("Koin x20 siap diklaim, Pergi dilewati")
-        } else if (onPage && gold < GOLD_MIN) {
+        } else if (panel && gold < GOLD_MIN && gray >= GRAY_MIN) {
             log("Koin x20 abu-abu: sudah diklaim, dilewati")
             return
+        } else if (!(panel && gold >= GOLD_MIN)) {
+            log("Koin x20 belum terbaca jelas, memakai jalur Pergi")
         }
         if (needPergi) {
             val g = s.exact("pergi")
@@ -911,18 +968,21 @@ object Engine {
     private fun claimEvents() {
         openEvent()
 
-        if (openMenu(menuSupply) != null) {
-            val n = claimLoop("Vanguard Coin Supply", 3)
+        val m1 = openMenu(menuSupply)
+        if (m1 != null) {
+            val n = claimLoop("Vanguard Coin Supply", 3, m1)
             log("Vanguard Coin Supply selesai (" + n + " ketukan klaim)")
         } else log("Menu Vanguard Coin Supply tidak ada, lanjut")
 
-        if (openMenuQuick(menuUpdate) != null) {
-            val n = claimLoop("Hadiah Pembaruan", 3)
+        val m2 = openMenuQuick(menuUpdate)
+        if (m2 != null) {
+            val n = claimLoop("Hadiah Pembaruan", 3, m2)
             log("Hadiah Pembaruan selesai (" + n + " ketukan klaim)")
         } else log("Menu Hadiah Pembaruan tidak ada, lanjut")
 
-        if (openMenu(menuFeedback) != null) {
-            claimCoin()
+        val m3 = openMenu(menuFeedback)
+        if (m3 != null) {
+            claimCoin(m3)
             log("Masukan Advance Server selesai")
         } else log("Menu Masukan Advance Server tidak ada, lanjut")
 
@@ -940,9 +1000,11 @@ object Engine {
 
     private fun claimServer(name: String) {
         serverT0 = now()
+        resetStats()
         status = "Klaim " + name
         log("===== SERVER " + name + " =====")
         claimEvents()
+        log("Waktu klaim " + name + ": " + ((now() - serverT0) / 1000) + " dtk, " + statLine())
         done.add(name)
         Prefs.addDone(name, acct)
         lastClaimed = name
@@ -973,8 +1035,10 @@ object Engine {
         // 1) Klaim server tempat game berada sekarang (ID akun belum diketahui)
         status = "Klaim server awal"
         serverT0 = now()
+        resetStats()
         log("===== SERVER AWAL =====")
         claimEvents()
+        log("Waktu klaim server awal: " + ((now() - serverT0) / 1000) + " dtk, " + statLine())
         firstPending = true
 
         // 2) Profil (baca ID + server saat ini) -> Akun -> Ganti Server -> daftar
