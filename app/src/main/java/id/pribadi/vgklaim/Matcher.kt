@@ -3,6 +3,7 @@ package id.pribadi.vgklaim
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Rect
 import java.io.File
 
 object Matcher {
@@ -59,11 +60,11 @@ object Matcher {
     }
 
     @Synchronized
-    fun findPrefix(s: Scr, prefix: String): Hit? {
+    fun findPrefix(s: Scr, prefix: String, region: Rect? = null): Hit? {
         var best: Hit? = null
         for ((k, t) in cache) {
             if (!k.startsWith(prefix)) continue
-            val h = search(s, t) ?: continue
+            val h = search(s, t, region) ?: continue
             if (best == null || h.score > best.score) best = h
         }
         return best
@@ -101,7 +102,7 @@ object Matcher {
         return sum
     }
 
-    private fun search(s: Scr, t: Tpl): Hit? {
+    private fun search(s: Scr, t: Tpl, region: Rect? = null): Hit? {
         val k = 4
         val sw = s.w
         val sh = s.h
@@ -116,8 +117,12 @@ object Matcher {
         var best = Int.MAX_VALUE
         var bx = 0
         var by = 0
-        for (y in 0..(ch - th)) {
-            for (x in 0..(cw - tw)) {
+        val gx0 = if (region != null) (region.left / k).coerceIn(0, cw - tw) else 0
+        val gx1 = if (region != null) ((region.right / k) - tw).coerceIn(gx0, cw - tw) else cw - tw
+        val gy0 = if (region != null) (region.top / k).coerceIn(0, ch - th) else 0
+        val gy1 = if (region != null) ((region.bottom / k) - th).coerceIn(gy0, ch - th) else ch - th
+        for (y in gy0..gy1) {
+            for (x in gx0..gx1) {
                 val v = sad(sc, cw, x, y, tc, tw, th, best)
                 if (v < best) {
                     best = v
