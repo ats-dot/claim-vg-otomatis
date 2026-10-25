@@ -31,9 +31,9 @@ object Prefs {
         get() = s().getBoolean("close_game", true)
         set(v) { s().edit().putBoolean("close_game", v).apply() }
 
-    // Gaya titik melayang hasil Diagnosa: 0 tanpa, 1 putih 14dp, 2 putih 2dp, 3 transparan 5%, 4 transparan penuh
+    // Gaya titik melayang hasil Diagnosa: 0 tanpa, 1 putih 14dp, 2 putih 2dp, 3 putih transparan 5%, 4 1 piksel tanpa warna, 5 14dp tanpa warna
     var dotStyle: Int
-        get() = s().getInt("dot_style", 1)
+        get() = s().getInt("dot_style", 5)
         set(v) { s().edit().putInt("dot_style", v).apply() }
 
     // Mode tanpa jeda: tidak ada tidur setelah ketukan. Kalau mati, jeda = stepMs milidetik.
