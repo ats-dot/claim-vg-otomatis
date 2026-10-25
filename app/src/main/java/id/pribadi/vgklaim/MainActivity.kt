@@ -225,6 +225,7 @@ class MainActivity : Activity() {
         col.addView(toggle("Mode cepat (lewati pemindaian server)", { Prefs.fast }, { Prefs.fast = it }), lp(6))
         col.addView(toggle("Tutup game otomatis setelah selesai", { Prefs.closeGame }, { Prefs.closeGame = it }), lp(6))
         col.addView(toggle("Tampilkan semua aplikasi", { Prefs.showAll }, { Prefs.showAll = it }), lp(6))
+        col.addView(toggle("Titik melayang saat klaim (hasil Diagnosa)", { Prefs.dotAuto }, { Prefs.dotAuto = it }), lp(6))
 
         val afterOpts = listOf("1. Kembali ke VG Klaim", "2. Ke Home", "3. Tetap di game")
         val ar = LinearLayout(this)
