@@ -15,6 +15,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.view.Display
+import android.view.View
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.TextView
@@ -174,6 +175,47 @@ class ClaimService : AccessibilityService() {
                 }, ms)
             } catch (e: Throwable) {
                 AppLog.add("Banner gagal: " + e.javaClass.simpleName + " " + e.message)
+            }
+        }
+    }
+
+    private var dotView: View? = null
+
+    // Titik kecil di pojok kiri bawah (tanpa tulisan, tidak bisa disentuh) supaya sistem menganggap
+    // aplikasi ini punya jendela yang terlihat. Dipakai untuk uji kecepatan baca layar.
+    fun dot(on: Boolean) {
+        ui.post {
+            try {
+                val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                val old = dotView
+                if (old != null) {
+                    try {
+                        wm.removeView(old)
+                    } catch (_: Throwable) {
+                    }
+                    dotView = null
+                }
+                if (on) {
+                    val d = resources.displayMetrics.density
+                    val v = View(this)
+                    val bg = GradientDrawable()
+                    bg.shape = GradientDrawable.OVAL
+                    bg.setColor(Color.WHITE)
+                    bg.setStroke(maxOf(1, d.toInt()), Color.BLACK)
+                    v.background = bg
+                    val sz = (14 * d).toInt()
+                    val lp = WindowManager.LayoutParams(
+                        sz, sz,
+                        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                        PixelFormat.TRANSLUCENT
+                    )
+                    lp.gravity = Gravity.BOTTOM or Gravity.START
+                    wm.addView(v, lp)
+                    dotView = v
+                }
+            } catch (e: Throwable) {
+                AppLog.add("Titik melayang gagal: " + e.javaClass.simpleName + " " + e.message)
             }
         }
     }
