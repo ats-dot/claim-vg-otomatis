@@ -262,30 +262,35 @@ class MainActivity : Activity() {
         }, lp(16))
         col.addView(btn("BERHENTI") { Engine.stop() }, lp(6))
 
-        val speeds = listOf(1f, 1.25f, 1.5f, 2f)
-        val sr = LinearLayout(this)
-        sr.orientation = LinearLayout.HORIZONTAL
-        val sbtns = ArrayList<Button>()
-        for (sp in speeds) {
+        col.addView(toggle("Mode tanpa jeda", { Prefs.noDelay }, { Prefs.noDelay = it }), lp(16))
+        val sm = edit("ms", Prefs.stepMs.toString(), true)
+        col.addView(card(tv("Jeda antar langkah (milidetik, 0-3000). Dipakai hanya saat Mode tanpa jeda MATI. Tekan Simpan waktu di bawah.", 12f, false, true), sm), lp(6))
+
+        val dm = listOf("Umum / OCR", "Geser daftar")
+        val dr = LinearLayout(this)
+        dr.orientation = LinearLayout.HORIZONTAL
+        val dbtns = ArrayList<Button>()
+        for (k in dm.indices) {
             val b = Button(this)
             b.isAllCaps = false
-            b.text = (if (sp == sp.toInt().toFloat()) sp.toInt().toString() else sp.toString()) + "x"
+            b.text = dm[k]
             b.setOnClickListener {
-                Prefs.speed = sp
-                for (k in sbtns.indices) style(sbtns[k], speeds[k] == sp)
+                Prefs.diagMode = k
+                for (j2 in dbtns.indices) style(dbtns[j2], j2 == k)
             }
-            style(b, Prefs.speed == sp)
-            sbtns.add(b)
+            style(b, Prefs.diagMode == k)
+            dbtns.add(b)
             val p = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             p.setMargins(dp(3), 0, dp(3), 0)
-            sr.addView(b, p)
+            dr.addView(b, p)
         }
-        col.addView(card(tv("Kecepatan gerak (mempersingkat jeda antar ketukan)", 12f, false, true), sr), lp(16))
+        col.addView(card(tv("Jenis Diagnosa (tombol Diagnosa ada di tab Log)", 12f, false, true), dr), lp(16))
 
         val lw = edit("detik", Prefs.lobbyWait.toString(), true)
-        col.addView(card(tv("Waktu tunggu LOBBY (detik, sebelum buka Event)", 12f, false, true), lw), lp())
+        col.addView(card(tv("Waktu tenang LOBBY (detik tanpa popup baru, sebelum buka Event)", 12f, false, true), lw), lp())
         col.addView(btn("Simpan waktu") {
             Prefs.lobbyWait = lw.text.toString().trim().toIntOrNull() ?: 3
+            Prefs.stepMs = sm.text.toString().trim().toIntOrNull() ?: 400
             toast("Tersimpan")
         }, lp(6))
         return sv
@@ -322,7 +327,7 @@ class MainActivity : Activity() {
         }
         val b3 = btn("Diagnosa") {
             Engine.diagnose(applicationContext)
-            toast("Buka game ke lobby, tunggu 8 detik")
+            toast("Pindah ke game dalam 15 detik, lalu diam")
         }
         for (b in listOf(b1, b2, b3)) {
             val p = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
