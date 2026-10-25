@@ -286,6 +286,27 @@ class ClaimService : AccessibilityService() {
         return gestureStroke(s2)
     }
 
+    // Gesekan dari beberapa potongan pendek beruntun (satu jari terus menempel). Sentuhan lebih rapat
+    // daripada satu gesekan panjang. Dipakai untuk uji di Diagnosa.
+    fun swipeSegments(x1: Float, y1: Float, x2: Float, y2: Float, segments: Int, segMs: Long): Boolean {
+        var prev: GestureDescription.StrokeDescription? = null
+        for (i in 0 until segments) {
+            val fx0 = x1 + (x2 - x1) * i / segments
+            val fy0 = y1 + (y2 - y1) * i / segments
+            val fx1 = x1 + (x2 - x1) * (i + 1) / segments
+            val fy1 = y1 + (y2 - y1) * (i + 1) / segments
+            val p = Path()
+            p.moveTo(fx0, fy0)
+            p.lineTo(fx1, fy1)
+            val more = i < segments - 1
+            val pv = prev
+            val st = if (pv == null) GestureDescription.StrokeDescription(p, 0, segMs, more) else pv.continueStroke(p, 0, segMs, more)
+            if (!gestureStroke(st)) return false
+            prev = st
+        }
+        return true
+    }
+
     private fun gesture(p: Path, ms: Long): Boolean =
         gestureStroke(GestureDescription.StrokeDescription(p, 0, ms))
 
