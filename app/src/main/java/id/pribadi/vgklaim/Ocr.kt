@@ -47,18 +47,31 @@ object Ocr {
         return sb.toString()
     }
 
-    // Null = OCR gagal (jangan dianggap layar kosong). Gambar diperkecil sesuai Prefs.ocrScale
-    // supaya baca layar lebih cepat; posisi baris dikembalikan ke ukuran layar asli.
-    fun read(bmp: Bitmap): List<Line>? {
+    // Null = OCR gagal (jangan dianggap layar kosong). Kalau region diisi, hanya area itu yang dibaca
+    // (lebih cepat); posisi baris dikembalikan ke koordinat layar penuh.
+    // Gambar diperkecil sesuai Prefs.ocrScale.
+    fun read(bmp: Bitmap, region: Rect? = null): List<Line>? {
         var small: Bitmap? = null
         return try {
+            val ox = region?.left ?: 0
+            val oy = region?.top ?: 0
+            val base: Bitmap = if (region != null) {
+                Bitmap.createBitmap(bmp, region.left, region.top, region.width(), region.height())
+            } else {
+                bmp
+            }
             val sc = Prefs.ocrScale.coerceIn(30, 100) / 100f
             val src: Bitmap
+            val f: Float
             if (sc < 0.99f) {
-                small = Bitmap.createScaledBitmap(bmp, (bmp.width * sc).toInt(), (bmp.height * sc).toInt(), true)
+                val sw = (base.width * sc).toInt().coerceAtLeast(32)
+                val sh = (base.height * sc).toInt().coerceAtLeast(32)
+                small = Bitmap.createScaledBitmap(base, sw, sh, true)
                 src = small
+                f = sc
             } else {
-                src = bmp
+                src = base
+                f = 1f
             }
             val t = Tasks.await(rec.process(InputImage.fromBitmap(src, 0)), 6, TimeUnit.SECONDS)
             val out = ArrayList<Line>()
@@ -67,16 +80,16 @@ object Ocr {
                     val r0 = l.boundingBox ?: continue
                     val n = norm(l.text)
                     if (n.isEmpty()) continue
-                    val r = if (src === bmp) r0 else Rect(
-                        (r0.left / sc).toInt(), (r0.top / sc).toInt(),
-                        (r0.right / sc).toInt(), (r0.bottom / sc).toInt()
+                    val r = Rect(
+                        (r0.left / f).toInt() + ox, (r0.top / f).toInt() + oy,
+                        (r0.right / f).toInt() + ox, (r0.bottom / f).toInt() + oy
                     )
                     out.add(Line(l.text, n, r))
                 }
             }
             out
         } catch (e: Throwable) {
-            AppLog.add("OCR gagal: " + e.javaClass.simpleName)
+            AppLog.add("OCR gagal: " + e.javaClass.simpleName + " " + (e.message ?: ""))
             null
         } finally {
             small?.recycle()
