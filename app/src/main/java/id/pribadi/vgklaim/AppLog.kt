@@ -11,7 +11,7 @@ object AppLog {
     @Synchronized
     fun add(m: String) {
         buf.add(fmt.format(Date()) + " " + m)
-        while (buf.size > 600) buf.removeAt(0)
+        while (buf.size > 1200) buf.removeAt(0)
     }
 
     @Synchronized
