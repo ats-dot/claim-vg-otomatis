@@ -364,6 +364,23 @@ class MainActivity : Activity() {
             Prefs.avatarY = y / 100f
             toast("Tersimpan")
         }, lp(6))
+
+        val os = edit("Skala baca layar (%)", Prefs.ocrScale.toString(), true)
+        col.addView(
+            card(
+                tv("Kecepatan baca layar (30-100). Makin kecil makin cepat, tapi tulisan kecil bisa tidak terbaca. 100 = penuh. Awal: 60.", 12f, false, true),
+                os
+            ), lp(16)
+        )
+        col.addView(btn("Simpan skala baca layar") {
+            val v = os.text.toString().trim().toIntOrNull()
+            if (v == null || v < 30 || v > 100) {
+                toast("Isi angka 30 sampai 100")
+                return@btn
+            }
+            Prefs.ocrScale = v
+            toast("Tersimpan")
+        }, lp(6))
         col.addView(
             tv(
                 "Aplikasi ini tidak memiliki izin internet. Layanan Aksesibilitas hanya dipakai untuk screenshot dan ketukan " +
