@@ -47,21 +47,39 @@ object Ocr {
         return sb.toString()
     }
 
-    fun read(bmp: Bitmap): List<Line> {
+    // Null = OCR gagal (jangan dianggap layar kosong). Gambar diperkecil sesuai Prefs.ocrScale
+    // supaya baca layar lebih cepat; posisi baris dikembalikan ke ukuran layar asli.
+    fun read(bmp: Bitmap): List<Line>? {
+        var small: Bitmap? = null
         return try {
-            val t = Tasks.await(rec.process(InputImage.fromBitmap(bmp, 0)), 10, TimeUnit.SECONDS)
+            val sc = Prefs.ocrScale.coerceIn(30, 100) / 100f
+            val src: Bitmap
+            if (sc < 0.99f) {
+                small = Bitmap.createScaledBitmap(bmp, (bmp.width * sc).toInt(), (bmp.height * sc).toInt(), true)
+                src = small
+            } else {
+                src = bmp
+            }
+            val t = Tasks.await(rec.process(InputImage.fromBitmap(src, 0)), 6, TimeUnit.SECONDS)
             val out = ArrayList<Line>()
             for (b in t.textBlocks) {
                 for (l in b.lines) {
-                    val r = l.boundingBox ?: continue
+                    val r0 = l.boundingBox ?: continue
                     val n = norm(l.text)
-                    if (n.isNotEmpty()) out.add(Line(l.text, n, r))
+                    if (n.isEmpty()) continue
+                    val r = if (src === bmp) r0 else Rect(
+                        (r0.left / sc).toInt(), (r0.top / sc).toInt(),
+                        (r0.right / sc).toInt(), (r0.bottom / sc).toInt()
+                    )
+                    out.add(Line(l.text, n, r))
                 }
             }
             out
         } catch (e: Throwable) {
             AppLog.add("OCR gagal: " + e.javaClass.simpleName)
-            emptyList()
+            null
+        } finally {
+            small?.recycle()
         }
     }
 
