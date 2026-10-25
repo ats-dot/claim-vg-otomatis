@@ -139,8 +139,8 @@ class ClaimService : AccessibilityService() {
     private val ui = Handler(Looper.getMainLooper())
 
     // Banner melayang di atas layar apa pun (hitam putih), hilang sendiri. Tanpa izin tambahan.
-    fun banner(text: String, ms: Long = 10000L) {
-        notifyDone(text)
+    fun banner(text: String, ms: Long = 10000L, notify: Boolean = true) {
+        if (notify) notifyDone(text)
         ui.post {
             try {
                 val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
