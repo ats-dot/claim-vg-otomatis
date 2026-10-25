@@ -44,6 +44,11 @@ object Engine {
     private var blindWhy = ""
     private var topupTaps = 0
     private var topupBlockUntil = 0L
+    private var lastTapX = -1000f
+    private var lastTapY = -1000f
+    private var lastTapT = 0L
+    private var minGap = 345L
+    private var darkTaps = 0
 
     // TAHAP 1: area baca (pecahan layar: kiri, atas, kanan, bawah). Langkah yang sudah dikenal
     // hanya membaca area kecil, bukan seluruh layar. Angka dari screenshot layar 2400x1080.
@@ -113,19 +118,26 @@ object Engine {
         app?.let { KeepAliveService.stop(it) }
     }
 
-    // Mode kecepatan hasil Diagnosa: 0 biasa, 1 titik melayang, 2 titik melayang + prioritas OCR tinggi
+    // Gaya titik melayang hasil Diagnosa: 0 tanpa titik, 1 putih 14dp, 2 putih kecil 2dp,
+    // 3 hampir transparan (5%), 4 transparan penuh
     private fun applyPerf() {
-        val m = if (Prefs.dotAuto) Prefs.perfMode else 0
-        Ocr.useFast = m >= 2
+        val m = if (Prefs.dotAuto) Prefs.dotStyle else 0
         if (m >= 1) {
-            ClaimService.inst?.dot(true)
-            log("Mode kecepatan " + m + ": titik melayang aktif" + (if (m >= 2) " + prioritas OCR tinggi" else ""))
+            ClaimService.inst?.dot(m)
+            log("Titik melayang gaya " + m + " aktif (" + dotName(m) + ")")
         }
     }
 
     private fun releasePerf() {
-        Ocr.useFast = false
-        ClaimService.inst?.dot(false)
+        ClaimService.inst?.dot(0)
+    }
+
+    private fun dotName(m: Int): String = when (m) {
+        1 -> "putih 14 dp"
+        2 -> "putih kecil 2 dp"
+        3 -> "hampir transparan 5%"
+        4 -> "transparan penuh"
+        else -> "tanpa titik"
     }
 
     private fun runMain() {
@@ -217,10 +229,11 @@ object Engine {
         var recovered = false
         var blindDone = false
         var lastLoop = now()
+        var rateHits = 0
         while (true) {
             alive()
             val svc = ClaimService.inst ?: throw Stop("Aksesibilitas mati")
-            val gap = 380 - (now() - lastShot)
+            val gap = minGap - (now() - lastShot)
             if (gap > 0) sleepMs(gap)
             lastShot = now()
             val t1 = now()
@@ -255,6 +268,15 @@ object Engine {
                     log("Baca layar lambat: " + (t3 - t1) + " ms (screenshot " + (t2 - t1) + ", OCR " + (t3 - t2) + ")")
                 }
                 return Scr(bmp, lines ?: emptyList())
+            }
+            if (svc.lastShotError.startsWith("kode 3") && rateHits < 5) {
+                rateHits++
+                if (minGap < 420L) {
+                    minGap = 420L
+                    log("Jeda screenshot dinaikkan ke 420 ms (sistem menolak interval pendek)")
+                }
+                sleepMs(120)
+                continue
             }
             tries++
             if (tries == 3) {
@@ -313,8 +335,20 @@ object Engine {
             "; memori " + used + "/" + (rt.maxMemory() / 1048576L) + " MB"
     }
 
-    private fun tapXY(x: Float, y: Float, why: String) {
+    // Jeda setelah ketukan: 0 kalau "Mode tanpa jeda" aktif, selain itu sesuai pengaturan milidetik
+    private fun stepWait() {
+        if (!Prefs.noDelay) sleepMs(Prefs.stepMs.toLong().coerceIn(0L, 3000L))
+    }
+
+    // repeat=true: ketukan berulang di titik sama memang disengaja (tidak dianggap dobel)
+    private fun tapXY(x: Float, y: Float, why: String, repeat: Boolean = false) {
         alive()
+        val dt = now() - lastTapT
+        if (!repeat && dt < 700L && Math.abs(x - lastTapX) < 60f && Math.abs(y - lastTapY) < 60f) {
+            log("Ketukan dobel dibatalkan (" + why + ", " + dt + " ms setelah ketukan di titik sama)")
+            sleepMs(150)
+            return
+        }
         log("Ketuk: " + why)
         val svc = ClaimService.inst
         if (svc == null) {
@@ -324,12 +358,15 @@ object Engine {
         var ok = svc.tap(x, y)
         if (!ok && svc.lastGestureFail != "timeout") {
             log("Ketukan gagal (" + why + "): " + svc.lastGestureFail + ". Mengulang sekali")
-            sleepS(0.3)
+            sleepMs(300)
             ok = svc.tap(x, y)
         }
         if (!ok) log("KETUKAN GAGAL (" + why + "): " + svc.lastGestureFail)
+        lastTapX = x
+        lastTapY = y
+        lastTapT = now()
         lastActive = now()
-        sleepS(0.6 / speed())
+        stepWait()
     }
 
     private fun tapLine(l: Line, why: String) = tapXY(l.cx, l.cy, why)
@@ -337,7 +374,8 @@ object Engine {
     private fun back() {
         ClaimService.inst?.back()
         lastActive = now()
-        sleepS(0.8)
+        sleepMs(150)
+        stepWait()
     }
 
     private fun doSwipe(x1: Float, y1: Float, x2: Float, y2: Float, ms: Long, why: String) {
@@ -355,9 +393,24 @@ object Engine {
         if (!ok) log("GESERAN GAGAL (" + why + "): " + svc.lastGestureFail)
     }
 
+    private fun doSwipeHold(x1: Float, y1: Float, x2: Float, y2: Float, moveMs: Long, holdMs: Long, why: String) {
+        val svc = ClaimService.inst
+        if (svc == null) {
+            log("GESERAN GAGAL (" + why + "): aksesibilitas mati")
+            return
+        }
+        var ok = svc.swipeHold(x1, y1, x2, y2, moveMs, holdMs)
+        if (!ok && svc.lastGestureFail != "timeout") {
+            log("Geseran gagal (" + why + "): " + svc.lastGestureFail + ". Mengulang sekali")
+            sleepMs(300)
+            ok = svc.swipeHold(x1, y1, x2, y2, moveMs, holdMs)
+        }
+        if (!ok) log("GESERAN GAGAL (" + why + "): " + svc.lastGestureFail)
+    }
+
     private fun swipe(x1: Float, y1: Float, x2: Float, y2: Float) {
         doSwipe(x1, y1, x2, y2, 380, "geser menu")
-        sleepS(0.7)
+        sleepMs(450)
     }
 
     private fun isLobby(s: Scr): Boolean {
@@ -523,7 +576,7 @@ object Engine {
                 return false
             }
             topupTaps++
-            tapXY(s.w * 0.856f, s.h * 0.074f, "tutup X (Hadiah Top Up Pertama; tidak mengetuk Top Up Sekarang)")
+            tapXY(s.w * 0.856f, s.h * 0.09f, "tutup X (Hadiah Top Up Pertama; tidak mengetuk Top Up Sekarang)")
             return true
         }
         topupTaps = 0
@@ -552,12 +605,13 @@ object Engine {
         return false
     }
 
-    private fun awaitLobby(maxSec: Int): Scr {
+    private fun awaitLobby(maxSec: Int, needLoad: Boolean = false): Scr {
         val t0 = now()
         var okCount = 0
         var relaunched = 0
         var quietLogged = false
         var loadLogged = false
+        var loadSeen = false
         var roleTries = 0
         val quietMs = 15_000L
         while (now() - t0 < maxSec * 1000L) {
@@ -575,6 +629,7 @@ object Engine {
             // Layar loading ("Memuat Game..." + tulisan persyaratan di bawahnya): jangan diketuk
             if (s.has("memuatgame", "sayatelahmembaca")) {
                 okCount = 0
+                loadSeen = true
                 if (acct == "-" && roleTries < 4) {
                     roleTries++
                     readRole(s)
@@ -583,26 +638,28 @@ object Engine {
                     log("Game sedang memuat (tidak mengetuk apa pun)")
                     loadLogged = true
                 }
-                sleepS(2.0)
+                sleepMs(400)
                 continue
             }
-            if (isLobby(s)) {
+            // Setelah ganti server: lobby lama bisa terlihat sebentar sebelum game restart
+            val tooEarly = needLoad && !loadSeen && elapsed < 25_000L
+            if (isLobby(s) && !tooEarly) {
                 okCount++
                 if (okCount >= 2) {
                     log("Lobby terdeteksi")
                     return s
                 }
-                sleepS(0.5)
+                sleepMs(250)
                 continue
             }
             okCount = 0
-            if (elapsed < quietMs) {
-                // 15 detik pertama: game masih memuat, jangan mengetuk apa pun
+            if (elapsed < quietMs || tooEarly) {
+                // Game masih memuat: jangan mengetuk apa pun
                 if (!quietLogged) {
                     log("Game sedang loading, menunggu (tidak mengetuk apa pun)")
                     quietLogged = true
                 }
-                sleepS(1.5)
+                sleepMs(400)
                 continue
             }
             // Strip bawah tidak cukup mengenali layar: baca layar penuh
@@ -613,33 +670,85 @@ object Engine {
                     log("Lobby terdeteksi")
                     return s
                 }
-                sleepS(0.5)
+                sleepMs(250)
                 continue
             }
             if (!popups(s)) {
                 log("Menunggu layar dikenali...")
-                sleepS(1.5)
+                sleepMs(500)
             }
         }
         throw Stop("Lobby tidak terdeteksi (cek kata kunci lobby di Setelan, jalankan Diagnosa)")
     }
 
-    private fun settleLobby() {
-        sleepS(Prefs.lobbyWait.toDouble())
-        var quiet = 0
-        for (i in 0 until 8) {
-            val s = cap()
-            if (popups(s)) quiet = 0 else {
-                quiet++
-                if (quiet >= 2) break
+    private fun lum(c: Int): Int {
+        val r = (c shr 16) and 255
+        val g = (c shr 8) and 255
+        val b = c and 255
+        return (r * 30 + g * 59 + b * 11) / 100
+    }
+
+    private fun maxLum(bmp: Bitmap, r: Rect): Int {
+        var m = 0
+        val x0 = r.left.coerceIn(0, bmp.width - 1)
+        val x1 = r.right.coerceIn(x0 + 1, bmp.width)
+        val y0 = r.top.coerceIn(0, bmp.height - 1)
+        val y1 = r.bottom.coerceIn(y0 + 1, bmp.height)
+        var y = y0
+        while (y < y1) {
+            var x = x0
+            while (x < x1) {
+                val l = lum(bmp.getPixel(x, y))
+                if (l > m) m = l
+                x += 2
             }
+            y += 2
+        }
+        return m
+    }
+
+    // Popup apa pun menggelapkan lobby di belakangnya. Kalau tulisan "Event" di lobby tampak redup,
+    // ketuk X di pojok kanan atas (x 85,6%, y 9%, pas untuk popup Top Up Pertama dan Bintang Keberuntungan).
+    private fun darkPopupX(s: Scr): Boolean {
+        if (!isLobby(s)) return false
+        val ev = s.exact("event") ?: return false
+        val m = maxLum(s.bmp, ev.r)
+        if (m >= 175) {
+            darkTaps = 0
+            return false
+        }
+        if (now() < topupBlockUntil) return false
+        if (darkTaps >= 3) {
+            darkTaps = 0
+            topupBlockUntil = now() + 60_000L
+            log("Lobby tetap gelap setelah 3 ketukan X. Pemeriksaan popup diabaikan 60 detik")
+            return false
+        }
+        darkTaps++
+        log("Lobby tampak gelap (kecerahan teks Event " + m + "), kemungkinan ada popup")
+        tapXY(s.w * 0.856f, s.h * 0.09f, "tutup X (popup)")
+        return true
+    }
+
+    // Pantau lobby terus-menerus: popup ditutup begitu muncul. Selesai kalau sudah tenang selama
+    // "waktu tunggu lobby" detik sejak popup terakhir.
+    private fun settleLobby() {
+        val calm = (Prefs.lobbyWait * 1000L).coerceAtLeast(800L)
+        val t0 = now()
+        var last = now()
+        while (now() - last < calm && now() - t0 < 30_000L) {
+            val s = cap()
+            if (popups(s) || darkPopupX(s)) last = now()
         }
     }
 
     private fun backToLobby() {
         for (i in 0 until 12) {
             val s = cap()
-            if (isLobby(s) && !eventOpen(s) && !isServerList(s)) return
+            if (isLobby(s) && !eventOpen(s) && !isServerList(s)) {
+                if (darkPopupX(s)) continue
+                return
+            }
             if (!isServerList(s) && tapX(s)) {
                 // X sudah diketuk
             } else if (i % 2 == 0 && (eventOpen(s) || isAccount(s) || isProfile(s) || isServerList(s))) {
@@ -647,7 +756,7 @@ object Engine {
             } else {
                 back()
             }
-            sleepS(0.6)
+            sleepMs(100)
         }
         throw Stop("Gagal kembali ke lobby")
     }
@@ -744,11 +853,12 @@ object Engine {
 
     // Gaya geser. xf = posisi x (pecahan lebar layar). Gaya pertama meniru gerakan jari pada rekaman:
     // di sisi kanan daftar (x sekitar 78%), cepat (sekitar 0,2 detik), naik sekitar 20% tinggi layar.
-    private class Sty(val ms: Long, val rows: Float, val name: String, val xf: Float)
+    private class Sty(val ms: Long, val rows: Float, val name: String, val xf: Float, val hold: Long = 0L)
 
     private val STYLES = listOf(
-        Sty(200L, 3.0f, "niru jari kanan", 0.78f),
-        Sty(350L, 3.0f, "jari kanan agak pelan", 0.78f),
+        Sty(200L, 3.0f, "niru jari + tahan", 0.78f, 600L),
+        Sty(200L, 3.0f, "tarik cepat kanan", 0.78f),
+        Sty(350L, 3.0f, "kanan agak pelan + tahan", 0.78f, 400L),
         Sty(200L, 3.0f, "tengah cepat", 0.50f),
         Sty(200L, 3.0f, "kiri cepat", 0.25f),
         Sty(700L, 2.0f, "tarik pelan tengah", 0.50f)
@@ -756,7 +866,7 @@ object Engine {
 
     // Geser daftar satu langkah dan BUKTIKAN daftarnya bergerak (posisi baris yang sama bergeser).
     // moved=false setelah semua gaya geser dicoba = benar-benar ujung daftar.
-    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 5): Step {
+    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 6): Step {
         val before = serverNums(s)
         val rh = rowH(s)
         var cur = s
@@ -769,8 +879,9 @@ object Engine {
             val x1 = s.w * (st.xf + 0.02f)
             val y0 = if (forward) s.h * 0.64f else s.h * 0.30f
             val y1 = if (forward) y0 - dist else y0 + dist
-            doSwipe(x0, y0, x1, y1, st.ms, "geser daftar (" + st.name + ")")
-            sleepS(1.0)
+            if (st.hold > 0L) doSwipeHold(x0, y0, x1, y1, st.ms, st.hold, "geser daftar (" + st.name + ")")
+            else doSwipe(x0, y0, x1, y1, st.ms, "geser daftar (" + st.name + ")")
+            sleepMs(500)
             scrollNo++
             var after = serverNums(cap(R_SERVER).also { cur = it })
             if (after.isEmpty()) {
@@ -793,7 +904,7 @@ object Engine {
             if (common == null) {
                 log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " terlalu jauh, baris mungkin terlewat. Geser balik")
                 doSwipe(x1, y1, x0, y0, st.ms, "geser balik")
-                sleepS(1.0)
+                sleepMs(500)
                 cur = cap(R_SERVER)
                 lost = true
                 continue
@@ -860,7 +971,6 @@ object Engine {
             return null
         }
         tapLine(gs, "Ganti Server")
-        sleepS(1.0)
         val l = waitServerList(12.0)
         if (l != null) return l
         log("Daftar karakter belum terbaca 12 detik setelah Ganti Server")
@@ -894,17 +1004,26 @@ object Engine {
     // sekali, lalu Ganti Server. Layar Profil tidak dibaca. null = pakai jalur biasa.
     private fun fastToList(s: Scr): Scr? {
         tapAvatar(s, false)
-        sleepS(1.1)
-        for (i in 0 until 3) {
-            tapXY(s.w * 0.105f, s.h * 0.745f, "Akun (posisi tetap " + (i + 1) + "/3)")
+        val t0 = now()
+        var lastAv = now()
+        while (now() - t0 < 7000L) {
+            val a = cap()
+            if (isAccount(a)) return accountToList(a)
+            if (isServerList(a)) return a
+            if (isProfile(a)) {
+                tapXY(a.w * 0.105f, a.h * 0.745f, "Akun (posisi tetap)", true)
+            } else if (isLobby(a)) {
+                if (darkPopupX(a)) continue
+                if (now() - lastAv > 1500L) {
+                    lastAv = now()
+                    tapAvatar(a, false)
+                }
+            } else {
+                popups(a)
+            }
         }
-        sleepS(0.4)
-        val a = cap(R_AKUN)
-        if (!isAccount(a)) {
-            log("Jalur cepat: Pengaturan Akun belum terbaca (teks: " + a.all.take(80) + ")")
-            return null
-        }
-        return accountToList(a)
+        log("Jalur cepat: Pengaturan Akun belum terbaca dalam 7 detik")
+        return null
     }
 
     private fun openServerList(): Scr {
@@ -944,6 +1063,7 @@ object Engine {
                 continue
             }
             // Di lobby: ketuk ikon profil (posisi tetap dulu, template avatar hanya cadangan)
+            if (darkPopupX(s)) continue
             if (fastFails == 0 && avatarFails == 0) {
                 val fl = fastToList(s)
                 if (fl != null) return fl
@@ -1061,16 +1181,17 @@ object Engine {
         }
         val l = found ?: throw Stop("Server " + name + " tidak ditemukan di daftar")
         tapLine(l, "Pilih server " + name)
-        sleepS(1.0)
+        sleepMs(300)
         confirmSwitch()
-        sleepS(3.0)
-        awaitLobby(200)
+        awaitLobby(200, true)
         settleLobby()
     }
 
     private fun confirmSwitch() {
         var gsTaps = 0
-        for (i in 0 until 14) {
+        var lastGs = 0L
+        val t0 = now()
+        while (now() - t0 < 25_000L) {
             val s = cap(R_SERVER)
             if (s.has("memuatgame")) {
                 log("Game memuat ulang")
@@ -1081,11 +1202,17 @@ object Engine {
                 val b = s.exact("ok") ?: s.exact("konfirmasi") ?: s.exact("ya")
                 if (b != null) {
                     tapLine(b, "OK (server telah diganti)")
-                    sleepS(1.0)
-                    val s2 = cap(R_SERVER)
-                    if (s2.has("pemberitahuansistem", "servertelahdiganti")) {
+                    // tunggu popup hilang atau game mulai restart; ulangi OK kalau popup masih terlihat
+                    val t1 = now()
+                    var retap = 0
+                    while (now() - t1 < 4000L) {
+                        val s2 = cap(R_SERVER)
+                        if (!s2.has("pemberitahuansistem", "servertelahdiganti", "restartgame", "melakukanrestart")) break
                         val b2 = s2.exact("ok")
-                        if (b2 != null) tapLine(b2, "OK diulang (popup masih terlihat)")
+                        if (b2 != null && retap < 3 && now() - t1 > 900L * (retap + 1)) {
+                            retap++
+                            tapLine(b2, "OK diulang (popup masih terlihat)")
+                        }
                     }
                     return
                 }
@@ -1093,14 +1220,12 @@ object Engine {
             // Daftar karakter: tombol emas "Ganti Server" di bawah daftar
             if (isServerList(s)) {
                 val gs = s.exact("gantiserver")
-                if (gs != null && gsTaps < 3) {
+                if (gs != null && gsTaps < 3 && now() - lastGs > 900L) {
                     tapLine(gs, "Ganti Server (tombol emas)")
                     gsTaps++
-                    sleepS(1.2)
-                    continue
+                    lastGs = now()
                 }
             }
-            sleepS(0.8)
         }
     }
 
@@ -1109,7 +1234,6 @@ object Engine {
         val t0 = now()
         while (now() - t0 < (sec * 1000).toLong()) {
             if (eventOpen(cap(R_EVT))) return true
-            sleepS(0.3)
         }
         return false
     }
@@ -1138,7 +1262,6 @@ object Engine {
                     return false
                 }
             }
-            sleepS(0.3)
         }
         return titled
     }
@@ -1163,8 +1286,10 @@ object Engine {
 
     private fun openEvent() {
         var cycles = 0
+        var quietSince = 0L
         var lastTxt = ""
-        for (a in 0 until 8) {
+        val tEnd = now() + 45_000L
+        while (now() < tEnd) {
             val s = cap()
             if (eventOpen(s)) return
             if (s.exact("hadiah") != null && waitHadiah("")) return
@@ -1180,6 +1305,13 @@ object Engine {
                     tapXY(p.x, p.y, "tab Hadiah (template petir, cocok " + (p.score * 100).toInt() + "%)")
                     if (waitHadiah(before)) return
                     continue
+                }
+                // Halaman masih memuat (hampir tidak ada tulisan): tunggu dulu, jangan mengetuk tab
+                if (before.isEmpty() && s.lines.size < 4) {
+                    if (quietSince == 0L) quietSince = now()
+                    if (now() - quietSince < 4000L) continue
+                } else {
+                    quietSince = 0L
                 }
                 // Tanpa template: coba posisi umum ikon petir satu per satu. Pindah ke posisi
                 // berikutnya hanya kalau halaman sudah jelas bukan Hadiah.
@@ -1199,25 +1331,23 @@ object Engine {
                 }
                 continue
             }
+            if (darkPopupX(s)) continue
             val l = s.exact("event")
             if (l != null) {
                 tapLine(l, "Event")
-                if (waitEventOpen(2.5)) return
                 continue
             }
             val h = Matcher.find(s, "event")
             if (h != null) {
                 tapXY(h.x, h.y, "Event (gambar)")
-                if (waitEventOpen(2.5)) return
                 continue
             }
             tapXY(s.w * PETIR_X, s.h * PETIR_Y, "Event (posisi tetap)")
-            if (waitEventOpen(2.5)) return
         }
         throw Stop("Halaman Hadiah di Event tidak terbuka. Teks layar terakhir: " + lastTxt)
     }
 
-    private fun openMenu(keys: List<String>): Scr? {
+    private fun openMenu(keys: List<String>, panelKeys: List<String>): Scr? {
         var seen = ""
         for (i in 0 until 7) {
             val s = cap(R_MENU)
@@ -1226,8 +1356,7 @@ object Engine {
                 val l = s.find(k)
                 if (l != null) {
                     tapLine(l, "menu " + k)
-                    sleepS(1.2)
-                    return cap(R_PANEL)
+                    return waitPanel(panelKeys)
                 }
             }
             val x = s.w * 0.15f
@@ -1237,14 +1366,27 @@ object Engine {
         return null
     }
 
+    private fun okBtn(s: Scr): Line? = s.exact("ok") ?: s.exact("konfirmasi") ?: s.exact("berikutnya")
+
     private fun waitOk(): Boolean {
-        for (i in 0 until 6) {
+        val t0 = now()
+        while (now() - t0 < 4000L) {
             val s = cap(R_OK)
-            val b = s.exact("ok") ?: s.exact("konfirmasi") ?: s.exact("berikutnya")
+            val b = okBtn(s)
             if (b != null) {
                 tapLine(b, "OK")
                 lastActive = now()
-                sleepS(0.8)
+                // tunggu popup hilang (tanpa tidur tetap); ulangi OK kalau masih terlihat
+                var tapT = now()
+                val t1 = now()
+                while (now() - t1 < 2500L) {
+                    val s2 = cap(R_OK)
+                    val b2 = okBtn(s2) ?: break
+                    if (now() - tapT > 900L) {
+                        tapLine(b2, "OK diulang")
+                        tapT = now()
+                    }
+                }
                 return true
             }
             val c = s.find("ketukuntuk")
@@ -1252,7 +1394,6 @@ object Engine {
                 tapLine(c, "lanjut")
                 return true
             }
-            sleepS(0.4)
         }
         return false
     }
@@ -1273,7 +1414,6 @@ object Engine {
             tapLine(l, "Klaim (" + label + ")")
             claimed++
             lastActive = now()
-            sleepS(0.8)
             if (waitOk()) {
                 noPopup = 0
             } else {
@@ -1289,8 +1429,27 @@ object Engine {
     private val menuUpdate = listOf("hadiahpembaruan", "hadiahpembaharuan", "pembaruan", "pembaharuan")
     private val menuFeedback = listOf("masukanadvanceserver", "masukanadvance", "masukan")
 
+    // Tulisan khas panel kanan tiap menu, untuk memastikan halaman yang benar sudah terbuka
+    private val panelSupply = listOf("vanguardcoin", "selesaikan", "klaimsemua", "logindalam")
+    private val panelUpdate = listOf("hadiahpembaruan", "menggapaibintang", "patchbaru", "versigame", "sudahdiklaim")
+    private val panelFeedback = listOf("berikanmasukan", "menemukanbug", "pengalamanburuk", "mengklaim")
+
+    private fun waitPanel(keys: List<String>, sec: Double = 3.0): Scr {
+        val t0 = now()
+        var s = cap(R_PANEL)
+        while (!s.has(*keys.toTypedArray())) {
+            if (now() - t0 > (sec * 1000).toLong()) {
+                log("Panel menu belum terverifikasi dalam " + sec + " detik, lanjut")
+                break
+            }
+            s = cap(R_PANEL)
+        }
+        return s
+    }
+
     // Cari menu: baca layar, geser turun SEKALI, baca lagi. Tidak geser naik.
-    private fun openMenuQuick(keys: List<String>): Scr? {
+    // Menu Hadiah Pembaruan ada di paling atas daftar: cukup baca, tanpa geser
+    private fun openMenuQuick(keys: List<String>, panelKeys: List<String>): Scr? {
         var seen = ""
         for (i in 0 until 2) {
             val s = cap(R_MENU)
@@ -1299,13 +1458,8 @@ object Engine {
                 val l = s.find(k)
                 if (l != null) {
                     tapLine(l, "menu " + k)
-                    sleepS(1.2)
-                    return cap(R_PANEL)
+                    return waitPanel(panelKeys)
                 }
-            }
-            if (i == 0) {
-                val x = s.w * 0.15f
-                swipe(x, s.h * 0.75f, x, s.h * 0.30f)
             }
         }
         log("Menu " + keys[0] + " tidak ketemu. Teks menu terakhir: " + seen.take(140))
@@ -1357,16 +1511,15 @@ object Engine {
         var gray = 0
         var panel = false
         // Tunggu sampai halaman kanan dan koin tergambar (maksimal 3 kali baca)
-        for (k in 0 until 3) {
+        val tw = now()
+        while (true) {
             panel = s.has("berikanmasukan", "menemukanbug", "pengalamanburuk")
             gold = coinGold(s)
             red = coinRed(s)
             gray = coinGray(s)
             if (panel && (gold >= GOLD_MIN || gray >= GRAY_MIN)) break
-            if (k < 2) {
-                sleepS(0.4)
-                s = cap(R_PANEL)
-            }
+            if (now() - tw > 2500L) break
+            s = cap(R_PANEL)
         }
         log("Koin x20: emas=" + gold + ", abu=" + gray + ", titik merah=" + red + (if (panel) "" else " (halaman kanan belum terbaca)"))
         var needPergi = true
@@ -1395,12 +1548,10 @@ object Engine {
                 }
                 log(if (seen) "Pusat Bantuan terbaca, kembali" else "Pusat Bantuan tidak terbaca, tetap kembali")
                 back()
-                sleepS(0.8)
-                val s2 = cap(R_EVT)
-                if (!eventOpen(s2)) {
+                if (!waitEventOpen(3.0)) {
                     log("Kembali dari Pergi, membuka Event lagi")
                     openEvent()
-                    openMenu(menuFeedback)
+                    openMenu(menuFeedback, panelFeedback)
                 }
             } else {
                 log("Tombol Pergi tidak terbaca")
@@ -1408,18 +1559,18 @@ object Engine {
         }
         // Tunggu titik merah muncul (siap diklaim), lalu ketuk koin
         var ready = false
-        for (k in 0 until 3) {
+        val tr = now()
+        while (true) {
             s = cap(R_PANEL)
             if (!panelUp(s)) break
             if (coinRed(s) >= RED_MIN) {
                 ready = true
                 break
             }
-            sleepS(0.4)
+            if (now() - tr > 2000L) break
         }
         if (panelUp(s)) {
             tapXY(s.w * COIN_X, s.h * COIN_Y, if (ready) "koin x20" else "koin x20 (titik merah belum terlihat)")
-            sleepS(1.0)
             waitOk()
         }
     }
@@ -1427,19 +1578,19 @@ object Engine {
     private fun claimEvents() {
         openEvent()
 
-        val m1 = openMenu(menuSupply)
+        val m1 = openMenu(menuSupply, panelSupply)
         if (m1 != null) {
             val n = claimLoop("Vanguard Coin Supply", 3, m1)
             log("Vanguard Coin Supply selesai (" + n + " ketukan klaim)")
         } else log("Menu Vanguard Coin Supply tidak ada, lanjut")
 
-        val m2 = openMenuQuick(menuUpdate)
+        val m2 = openMenuQuick(menuUpdate, panelUpdate)
         if (m2 != null) {
             val n = claimLoop("Hadiah Pembaruan", 3, m2)
             log("Hadiah Pembaruan selesai (" + n + " ketukan klaim)")
         } else log("Menu Hadiah Pembaruan tidak ada, lanjut")
 
-        val m3 = openMenu(menuFeedback)
+        val m3 = openMenu(menuFeedback, panelFeedback)
         if (m3 != null) {
             claimCoin(m3)
             log("Masukan Advance Server selesai")
@@ -1662,39 +1813,114 @@ object Engine {
     }
 
     // Pengukuran Tahap 1: OCR layar penuh vs area kecil, uji screenshot, status baterai
-    // Uji prioritas: bandingkan kecepatan OCR pada screenshot yang SAMA dalam 3 mode.
-    // Hasilnya disimpan sebagai Prefs.perfMode dan dipakai otomatis saat klaim.
+    // Uji gaya titik melayang: bandingkan kecepatan OCR pada screenshot yang SAMA.
+    // Gaya yang paling tidak terlihat tetapi masih jauh lebih cepat disimpan sebagai Prefs.dotStyle.
     private fun diagPriority(bmp: Bitmap) {
-        log("DIAGNOSA: uji prioritas OCR (layar penuh 3x + menu kiri 3x per mode, skala " + Prefs.ocrScale + "%)")
+        log("DIAGNOSA: uji gaya titik melayang (layar penuh 3x + menu kiri 3x per gaya, skala " + Prefs.ocrScale + "%)")
         val svc = ClaimService.inst
-        val res = LongArray(3)
+        val res = LongArray(5)
         try {
-            for (mode in 1..3) {
+            for (m in 0..4) {
                 alive()
-                Ocr.useFast = (mode == 3)
-                if (mode >= 2) {
-                    svc?.dot(true)
-                    sleepS(1.5)
-                }
+                svc?.dot(m)
+                sleepS(1.5)
                 val a = timeOcr(bmp, null)
-                res[mode - 1] = lastAvg
+                res[m] = lastAvg
                 val b = timeOcr(bmp, rect(bmp, R_MENU))
-                val nm = if (mode == 1) "biasa" else if (mode == 2) "titik melayang" else "titik melayang + prioritas OCR"
-                log("DIAGNOSA mode " + mode + " (" + nm + "): layar penuh " + a + " | menu kiri " + b)
+                log("DIAGNOSA gaya " + m + " (" + dotName(m) + "): layar penuh " + a + " | menu kiri " + b)
             }
         } finally {
-            Ocr.useFast = false
-            svc?.dot(false)
+            svc?.dot(0)
         }
+        // pilih gaya paling tersamar (nomor terbesar) yang jauh lebih cepat dari tanpa titik
         var best = 0
-        for (i in 1..2) if (res[i] > 0 && res[i] < res[best]) best = i
-        if (best != 0 && res[best] < res[0] * 0.75) {
-            Prefs.perfMode = best
-            log("DIAGNOSA: mode " + (best + 1) + " lebih cepat (" + res[best] + " ms vs " + res[0] + " ms biasa). Dipakai otomatis saat klaim (saklar di Beranda).")
+        for (m in 1..4) if (res[m] > 0 && res[m] < res[0] * 0.75) best = m
+        Prefs.dotStyle = best
+        if (best == 0) {
+            log("DIAGNOSA: tidak ada gaya titik yang jauh lebih cepat dari tanpa titik (" + res.joinToString(", ") + " ms). Klaim memakai tanpa titik.")
         } else {
-            Prefs.perfMode = 0
-            log("DIAGNOSA: tidak ada mode yang jauh lebih cepat dari biasa (" + res[0] + ", " + res[1] + ", " + res[2] + " ms). Klaim memakai mode biasa.")
+            log("DIAGNOSA: gaya " + best + " (" + dotName(best) + ") dipakai otomatis saat klaim: " + res[best] + " ms vs " + res[0] + " ms tanpa titik.")
         }
+    }
+
+    // Selisih posisi baris yang sama (dalam satuan baris). null = tidak ada baris yang sama.
+    private fun shiftRows(before: Map<String, Line>, after: Map<String, Line>, rh: Float): Float? {
+        for (k in after.keys) {
+            val b = before[k] ?: continue
+            return Math.abs(b.cy - after[k]!!.cy) / rh
+        }
+        return null
+    }
+
+    private fun resetTop(first: Set<String>) {
+        for (i in 0 until 5) {
+            val s = cap(R_SERVER)
+            val n = serverNums(s)
+            if (n.isNotEmpty() && first.contains(n.keys.first())) return
+            doSwipe(s.w * 0.78f, s.h * 0.30f, s.w * 0.80f, s.h * 0.65f, 200, "kembali ke atas")
+            sleepMs(900)
+        }
+    }
+
+    private class Var(val name: String, val run: () -> Unit)
+
+    // Diagnosa geser: coba beberapa cara menggeser di Daftar Karakter dan catat hasilnya
+    private fun diagScroll(s0: Scr) {
+        log("DIAGNOSA GESER: layar " + s0.w + "x" + s0.h + ", " + s0.lines.size + " baris teks")
+        if (!isServerList(s0)) {
+            log("DIAGNOSA GESER: ini bukan Daftar Karakter (teks: " + s0.all.take(100) + "). Buka Daftar Karakter lalu ulangi.")
+            return
+        }
+        val first = serverNums(s0)
+        val firstKeys = first.keys.toSet()
+        val rh = rowH(s0)
+        log("DIAGNOSA GESER: awal terlihat " + rangeText(first) + ", server saat ini " + readCurrent(s0) + ", tinggi baris " + rh.toInt() + " px")
+        val svc = ClaimService.inst
+        val h = s0.h.toFloat()
+        val w = s0.w.toFloat()
+        val d3 = 3 * rh
+        val variants = listOf(
+            Var("1 cepat 200ms x78%, tanpa tahan") { doSwipe(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 200, "v1") },
+            Var("2 cepat 200ms x78% + tahan 600ms") { doSwipeHold(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 200, 600, "v2") },
+            Var("3 cepat 200ms x50% + tahan 600ms") { doSwipeHold(w * 0.50f, h * 0.64f, w * 0.52f, h * 0.64f - d3, 200, 600, "v3") },
+            Var("4 pelan 1500ms x78%") { doSwipe(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 1500, "v4") },
+            Var("5 dua gesekan cepat beruntun x78%") {
+                doSwipe(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 200, "v5a")
+                sleepMs(800)
+                doSwipe(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 200, "v5b")
+            },
+            Var("6 cepat 200ms x25%") { doSwipe(w * 0.25f, h * 0.64f, w * 0.27f, h * 0.64f - d3, 200, "v6") },
+            Var("7 panjang 40% tinggi 200ms x78% + tahan 600ms") { doSwipeHold(w * 0.78f, h * 0.66f, w * 0.80f, h * 0.26f, 200, 600, "v7") },
+            Var("8 tahan 1200ms di ujung x78%") { doSwipeHold(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 200, 1200, "v8") },
+            Var("9 ketuk baris paling bawah 3x") {
+                val n = serverNums(cap(R_SERVER))
+                val last = n.values.maxByOrNull { it.cy }
+                if (last != null) {
+                    for (i in 0 until 3) {
+                        tapXY(last.cx, last.cy, "baris bawah " + (i + 1) + "/3", true)
+                        sleepMs(700)
+                    }
+                }
+            }
+        )
+        for (v in variants) {
+            alive()
+            resetTop(firstKeys)
+            val before = serverNums(cap(R_SERVER))
+            v.run()
+            sleepMs(1000)
+            val a1 = serverNums(cap(R_SERVER))
+            val sh1 = shiftRows(before, a1, rh)
+            sleepMs(2500)
+            val a2 = serverNums(cap(R_SERVER))
+            val sh2 = shiftRows(before, a2, rh)
+            val t1 = if (sh1 == null) "tanpa baris sama (lompat jauh)" else "bergerak " + String.format("%.1f", sh1) + " baris"
+            val grew = a2.keys.size != a1.keys.size || a2.keys.joinToString(",") != a1.keys.joinToString(",")
+            log("DIAGNOSA GESER " + v.name + ": 1 dtk sesudah: " + rangeText(a1) + ", " + t1 +
+                " | 3,5 dtk sesudah: " + rangeText(a2) + (if (grew) " (BERUBAH setelah menunggu)" else " (sama)"))
+        }
+        resetTop(firstKeys)
+        log("DIAGNOSA GESER: selesai")
     }
 
     private fun diagExtra(ctx: Context, s: Scr) {
@@ -1732,10 +1958,13 @@ object Engine {
         lastActive = now()
         Thread {
             try {
-                log("DIAGNOSA: mulai 15 detik lagi. Pindah ke game dan buka layar yang mau diukur, lalu jangan sentuh layar.")
+                log("DIAGNOSA (" + (if (Prefs.diagMode == 1) "geser daftar" else "umum/OCR") + "): mulai 15 detik lagi. Pindah ke game dan buka layar yang mau diukur, lalu jangan sentuh layar.")
                 ClaimService.inst?.banner("Diagnosa mulai: pindah ke game, jangan sentuh layar (15 dtk)", 12000L, false)
                 sleepS(15.0)
                 val s = cap()
+                if (Prefs.diagMode == 1) {
+                    diagScroll(s)
+                } else {
                 log("DIAGNOSA: layar " + s.w + "x" + s.h + ", " + s.lines.size + " baris teks")
                 for (l in s.lines) {
                     val px = (l.cx * 100 / s.w).toInt()
@@ -1754,6 +1983,7 @@ object Engine {
                 for (n in Matcher.names(ctx)) {
                     val h = Matcher.find(s, n)
                     log("  template " + n + ": " + (if (h == null) "tidak cocok" else "cocok " + (h.score * 100).toInt() + "% di titik " + h.x.toInt() + "," + h.y.toInt()))
+                }
                 }
                 log("DIAGNOSA selesai. Salin log di tab Log dan kirim ke Claude.")
                 ClaimService.inst?.banner("Diagnosa selesai. Buka VG Klaim > Log", 15000L, false)
