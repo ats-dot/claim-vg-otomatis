@@ -50,7 +50,7 @@ object Engine {
     private class Reg(val x0: Float, val y0: Float, val x1: Float, val y1: Float)
 
     private val R_MENU = Reg(0.04f, 0.08f, 0.27f, 0.99f)   // daftar menu kiri halaman Hadiah
-    private val R_EVT = Reg(0.04f, 0.08f, 0.62f, 1.0f)     // menu kiri + judul besar (cek halaman Hadiah terbuka)
+    private val R_EVT = Reg(0.04f, 0.0f, 0.62f, 1.0f)      // judul halaman + menu kiri + judul besar (cek halaman Hadiah terbuka)
     private val R_PANEL = Reg(0.38f, 0.05f, 1.0f, 1.0f)    // panel kanan Hadiah (Klaim, Pergi, koin)
     private val R_OK = Reg(0.20f, 0.60f, 0.80f, 1.0f)      // tombol OK / ketuk untuk lanjut
     private val R_PROFIL = Reg(0.0f, 0.10f, 0.46f, 1.0f)   // ID akun + tab kiri layar Profil
@@ -58,6 +58,8 @@ object Engine {
     private val R_SERVER = Reg(0.12f, 0.12f, 0.88f, 0.88f) // daftar karakter, tombol emas, popup sistem
     private val R_BOTTOM = Reg(0.0f, 0.80f, 1.0f, 1.0f)    // strip bawah: Memuat Game + menu lobby
     private val R_TOP = Reg(0.0f, 0.0f, 1.0f, 0.14f)
+    private val R_ROLE = Reg(0.55f, 0.0f, 1.0f, 0.09f)     // "Role: ID akun" di kanan atas layar Memuat Game
+    private val R_ACCID = Reg(0.70f, 0.12f, 1.0f, 0.20f)  // "Account ID" di Pengaturan Akun
     private val R_ID = Reg(0.20f, 0.14f, 0.50f, 0.26f)     // baris "ID: ... (kode server)" di Profil, dibaca resolusi penuh       // strip atas: judul halaman (Pusat Bantuan)
     private var acct: String = "-"
     private var firstPending = false
@@ -425,11 +427,36 @@ object Engine {
         cur = p.second
     }
 
-    // Cadangan: "Account ID: ..." di layar Pengaturan Akun
+    // Role di layar Memuat Game = ID akun (sama dengan ID di Profil)
+    private fun parseRole(lines: List<Line>): String? {
+        val re = Regex("(?i)role\\D{0,4}([0-9]{6,12})")
+        for (l in lines) {
+            val m = re.find(l.text) ?: continue
+            return m.groupValues[1]
+        }
+        return null
+    }
+
+    private fun readRole(s: Scr): Boolean {
+        val l = Ocr.read(s.bmp, rect(s.bmp, R_ROLE), 100) ?: return false
+        val id = parseRole(l) ?: return false
+        setAccount(id, "layar Memuat Game (Role)")
+        return true
+    }
+
+    // "Account ID: ..." di layar Pengaturan Akun, dibaca resolusi penuh di strip tipis.
+    // Kalau ID sudah diketahui dari layar loading, hanya dicocokkan (beda = peringatan di log).
     private fun readAccountId(s: Scr) {
-        if (acct != "-") return
-        val m = Regex("accountid([0-9]{6,12})").find(s.all) ?: return
-        setAccount(m.groupValues[1], "Pengaturan Akun")
+        val hi = Ocr.read(s.bmp, rect(s.bmp, R_ACCID), 100)
+        val txt = if (hi != null) hi.joinToString("") { it.norm } else ""
+        val re = Regex("accountid([0-9]{6,12})")
+        val m = re.find(txt) ?: re.find(s.all) ?: return
+        val id = m.groupValues[1]
+        if (acct == "-") {
+            setAccount(id, "Pengaturan Akun")
+        } else if (acct != id) {
+            log("Peringatan: ID dari layar loading (" + acct + ") beda dengan Account ID di Pengaturan Akun (" + id + ")")
+        }
     }
 
     private fun isAccount(s: Scr): Boolean = s.has("pusatakun", "gantiakun", "pengaturanakun")
@@ -514,6 +541,7 @@ object Engine {
         var relaunched = 0
         var quietLogged = false
         var loadLogged = false
+        var roleTries = 0
         val quietMs = 15_000L
         while (now() - t0 < maxSec * 1000L) {
             // Baca hanya strip bawah layar: cukup untuk mengenali "Memuat Game" dan menu lobby
@@ -530,6 +558,10 @@ object Engine {
             // Layar loading ("Memuat Game..." + tulisan persyaratan di bawahnya): jangan diketuk
             if (s.has("memuatgame", "sayatelahmembaca")) {
                 okCount = 0
+                if (acct == "-" && roleTries < 4) {
+                    roleTries++
+                    readRole(s)
+                }
                 if (!loadLogged) {
                     log("Game sedang memuat (tidak mengetuk apa pun)")
                     loadLogged = true
@@ -836,8 +868,26 @@ object Engine {
         return null
     }
 
+    // Jalur cepat dari lobby: ketuk ikon profil, ketuk Akun (posisi tetap) 3x, baca layar Pengaturan Akun
+    // sekali, lalu Ganti Server. Layar Profil tidak dibaca. null = pakai jalur biasa.
+    private fun fastToList(s: Scr): Scr? {
+        tapAvatar(s, false)
+        sleepS(1.1)
+        for (i in 0 until 3) {
+            tapXY(s.w * 0.105f, s.h * 0.745f, "Akun (posisi tetap " + (i + 1) + "/3)")
+        }
+        sleepS(0.4)
+        val a = cap(R_AKUN)
+        if (!isAccount(a)) {
+            log("Jalur cepat: Pengaturan Akun belum terbaca (teks: " + a.all.take(80) + ")")
+            return null
+        }
+        return accountToList(a)
+    }
+
     private fun openServerList(): Scr {
         var avatarFails = 0
+        var fastFails = 0
         var unknown = 0
         for (attempt in 0 until 10) {
             var s = cap()
@@ -872,6 +922,13 @@ object Engine {
                 continue
             }
             // Di lobby: ketuk ikon profil (posisi tetap dulu, template avatar hanya cadangan)
+            if (fastFails == 0 && avatarFails == 0) {
+                val fl = fastToList(s)
+                if (fl != null) return fl
+                fastFails++
+                log("Jalur cepat gagal, memakai jalur biasa")
+                continue
+            }
             tapAvatar(s, avatarFails >= 1 && Matcher.has("avatar"))
             sleepS(1.5)
             val pr = cap(R_PROFIL)
@@ -929,6 +986,18 @@ object Engine {
 
     private fun pickNext(): String? {
         var s = openServerList()
+        val rc = readCurrent(s)
+        if (rc != null) {
+            val lc = lastClaimed
+            if (lc != null && lc != rc) {
+                log("Peringatan: server saat ini di daftar (" + rc + ") tidak sama dengan yang baru diklaim (" + lc + "). Pergantian server mungkin gagal, " + lc + " dicatat belum selesai.")
+                done.remove(lc)
+                Prefs.removeDone(lc, acct)
+                refreshCount()
+            }
+            lastClaimed = null
+            cur = rc
+        }
         if (!Prefs.skipAbove) s = scrollTop(s)
         for (page in 0 until 60) {
             alive()
@@ -1023,28 +1092,81 @@ object Engine {
         return false
     }
 
+    // Judul halaman: tulisan di pojok kiri atas
+    private fun pageTitle(s: Scr): String =
+        s.lines.filter { it.cy < s.h * 0.10f && it.cx < s.w * 0.5f }.sortedBy { it.cx }.joinToString("") { it.norm }
+
+    // Setelah mengetuk sebuah tab: tunggu SABAR sampai halaman Hadiah terbuka (jaringan lambat bisa butuh
+    // beberapa detik). Pindah ke tab lain hanya kalau halaman sudah jelas bukan Hadiah.
+    private fun waitHadiah(before: String): Boolean {
+        val t0 = now()
+        var titled = false
+        while (now() - t0 < 9000L) {
+            val m = cap(R_EVT)
+            if (eventOpen(m)) return true
+            if (m.exact("hadiah") != null) {
+                if (!titled) {
+                    titled = true
+                    log("Judul Hadiah terlihat, menunggu daftar menu dimuat...")
+                }
+            } else if (!titled && before.isNotEmpty() && now() - t0 > 2500L) {
+                val t = pageTitle(m)
+                if (t.isNotEmpty()) {
+                    log("Halaman setelah ketuk tab: judul \"" + t + "\" (bukan Hadiah)")
+                    return false
+                }
+            }
+            sleepS(0.3)
+        }
+        return titled
+    }
+
+    // Simpan potongan ikon petir dari layar Anda sendiri, supaya lain kali dicari lewat gambar
+    private fun learnPetir(s: Scr, x: Float, y: Float) {
+        try {
+            val c = app ?: return
+            if (Matcher.names(c).any { it.startsWith("petir") }) return
+            val sz = (s.h * 0.10f).toInt()
+            val x0 = (x - sz / 2f).toInt().coerceIn(0, s.w - sz)
+            val y0 = (y - sz / 2f).toInt().coerceIn(0, s.h - sz)
+            val b = Bitmap.createBitmap(s.bmp, x0, y0, sz, sz)
+            val f = java.io.File(Matcher.dir(c), "petir_auto.png")
+            java.io.FileOutputStream(f).use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            Matcher.reload(c)
+            log("Template petir_auto disimpan dari layar Anda sendiri (" + sz + " px di " + x0 + "," + y0 + "). Bisa dihapus di tab Templat")
+        } catch (e: Throwable) {
+            log("Gagal menyimpan template petir otomatis: " + e.javaClass.simpleName)
+        }
+    }
+
     private fun openEvent() {
         var cycles = 0
         var lastTxt = ""
         for (a in 0 until 8) {
             val s = cap()
             if (eventOpen(s)) return
+            if (s.exact("hadiah") != null && waitHadiah("")) return
             if (popups(s)) continue
             lastTxt = s.all.take(120)
             if (!isLobby(s)) {
                 // Bukan lobby dan bukan halaman Hadiah: kemungkinan layar Event tab lain
-                // (mis. Festival Pemuda). Ketuk ikon petir untuk pindah ke tab Hadiah.
-                val p = Matcher.findPrefix(s, "petir")
+                // (mis. Festival Pemuda). Cari ikon petir (tab Hadiah) dan ketuk SATU kali.
+                val before = pageTitle(s)
+                val col = Rect(0, (s.h * 0.10f).toInt(), (s.w * 0.12f).toInt(), (s.h * 0.95f).toInt())
+                val p = Matcher.findPrefix(s, "petir", col)
                 if (p != null) {
-                    tapXY(p.x, p.y, "tab Hadiah (template petir)")
-                    if (waitEventOpen(3.5)) return
+                    tapXY(p.x, p.y, "tab Hadiah (template petir, cocok " + (p.score * 100).toInt() + "%)")
+                    if (waitHadiah(before)) return
                     continue
                 }
-                // Tanpa template: posisi ikon petir berpindah-pindah, jadi coba ikon tab
-                // di sisi kiri satu per satu sampai halaman Hadiah terbuka.
+                // Tanpa template: coba posisi umum ikon petir satu per satu. Pindah ke posisi
+                // berikutnya hanya kalau halaman sudah jelas bukan Hadiah.
                 for (yy in listOf(PETIR_Y, 0.347f, 0.671f, 0.185f)) {
                     tapXY(s.w * PETIR_X, s.h * yy, "ikon tab kiri y=" + (yy * 100).toInt() + "% (cari tab Hadiah)")
-                    if (waitEventOpen(3.0)) return
+                    if (waitHadiah(before)) {
+                        learnPetir(s, s.w * PETIR_X, s.h * yy)
+                        return
+                    }
                 }
                 cycles++
                 log("Halaman Hadiah belum terbuka setelah semua tab dicoba (putaran " + cycles + "). Teks layar: " + lastTxt)
@@ -1470,13 +1592,48 @@ object Engine {
 
     private fun timeOcr(bmp: Bitmap, r: Rect?): String {
         val ts = ArrayList<Long>()
+        var n = 0
         for (i in 0 until 3) {
             val t0 = now()
             val l = Ocr.read(bmp, r)
             ts.add(now() - t0)
             if (l == null) return "OCR gagal"
+            n = l.size
         }
-        return ts.joinToString(", ") + " ms (rata-rata " + (ts.sum() / ts.size) + " ms)"
+        return ts.joinToString(", ") + " ms (rata-rata " + (ts.sum() / ts.size) + " ms, " + n + " baris)"
+    }
+
+    private fun one(bmp: Bitmap, r: Rect): String {
+        val t0 = now()
+        val l = Ocr.read(bmp, r)
+        val dt = now() - t0
+        if (l == null) return dt.toString() + " ms (gagal)"
+        val smp = if (l.isEmpty()) "-" else l[0].norm.take(14)
+        return dt.toString() + " ms/" + l.size + " baris/" + smp
+    }
+
+    // Uji tinggi potongan: pita lebar penuh dan potongan kolom kiri (menu), di beberapa posisi
+    private fun diagStrips(bmp: Bitmap) {
+        log("DIAGNOSA: uji tinggi pita (lebar penuh), 3 posisi atas/tengah/bawah")
+        for (hp in listOf(8, 12, 16, 24, 34)) {
+            val h = (bmp.height * hp / 100f).toInt()
+            val sb = StringBuilder("  pita " + hp + "%:")
+            for (pos in listOf(0.0f, 0.33f, 0.66f)) {
+                val y0 = minOf((bmp.height * pos).toInt(), bmp.height - h)
+                sb.append(" [y" + (pos * 100).toInt() + "%] " + one(bmp, Rect(0, y0, bmp.width, y0 + h)) + ";")
+            }
+            log(sb.toString())
+        }
+        log("DIAGNOSA: uji potongan kolom kiri (x 4-27%), 2 posisi")
+        for (hp in listOf(12, 24, 34)) {
+            val h = (bmp.height * hp / 100f).toInt()
+            val sb = StringBuilder("  kolom " + hp + "%:")
+            for (pos in listOf(0.08f, 0.50f)) {
+                val y0 = minOf((bmp.height * pos).toInt(), bmp.height - h)
+                sb.append(" [y" + (pos * 100).toInt() + "%] " + one(bmp, Rect((bmp.width * 0.04f).toInt(), y0, (bmp.width * 0.27f).toInt(), y0 + h)) + ";")
+            }
+            log(sb.toString())
+        }
     }
 
     // Pengukuran Tahap 1: OCR layar penuh vs area kecil, uji screenshot, status baterai
@@ -1505,6 +1662,10 @@ object Engine {
             val pct = ((r.x1 - r.x0) * (r.y1 - r.y0) * 100).toInt()
             log("  area " + pr.first + " (" + pct + "% layar): " + timeOcr(s.bmp, rect(s.bmp, r)))
         }
+        val rl = Ocr.read(s.bmp, rect(s.bmp, R_ROLE), 100)
+        val rid = if (rl != null) parseRole(rl) else null
+        log("DIAGNOSA: Role (ID akun) dari strip kanan atas: " + (rid ?: "tidak terbaca (normal kalau bukan layar Memuat Game)"))
+        diagStrips(s.bmp)
     }
 
     fun diagnose(ctx: Context) {
@@ -1523,8 +1684,9 @@ object Engine {
         lastActive = now()
         Thread {
             try {
-                log("DIAGNOSA: mulai 8 detik lagi. Buka game ke LOBBY sekarang.")
-                sleepS(8.0)
+                log("DIAGNOSA: mulai 15 detik lagi. Pindah ke game dan buka layar yang mau diukur, lalu jangan sentuh layar.")
+                ClaimService.inst?.banner("Diagnosa mulai: pindah ke game, jangan sentuh layar (15 dtk)", 12000L, false)
+                sleepS(15.0)
                 val s = cap()
                 log("DIAGNOSA: layar " + s.w + "x" + s.h + ", " + s.lines.size + " baris teks")
                 for (l in s.lines) {
@@ -1546,6 +1708,7 @@ object Engine {
                     log("  template " + n + ": " + (if (h == null) "tidak cocok" else "cocok " + (h.score * 100).toInt() + "% di titik " + h.x.toInt() + "," + h.y.toInt()))
                 }
                 log("DIAGNOSA selesai. Salin log di tab Log dan kirim ke Claude.")
+                ClaimService.inst?.banner("Diagnosa selesai. Buka VG Klaim > Log", 15000L, false)
             } catch (e: Throwable) {
                 log("DIAGNOSA error: " + e.message)
             } finally {
