@@ -869,18 +869,20 @@ object Engine {
 
     // Gaya geser. xf = posisi x (pecahan lebar layar). Gaya pertama meniru gerakan jari pada rekaman:
     // di sisi kanan daftar (x sekitar 78%), cepat (sekitar 0,2 detik), naik sekitar 20% tinggi layar.
-    private class Sty(val ms: Long, val rows: Float, val name: String, val xf: Float, val hold: Long = 0L, val hard: Boolean = false)
+    private class Sty(val ms: Long, val rows: Float, val name: String, val xf: Float, val hold: Long = 0L, val hard: Boolean = false, val y0f: Float = -1f, val y1f: Float = -1f)
 
     // Protokol dari video contoh: (1) geseran pelan menggeser daftar 0,6 baris sampai baris ke-5 penuh;
     // (2) geseran KERAS (sekitar 6 baris dalam 0,18 detik, jari ditahan di ujung) memuat baris ke-6 dst;
     // (3) sesudah itu geseran pelan sudah cukup sampai baris terakhir.
+    // Gesekan KERAS meniru auto clicker yang terbukti berhasil memuat baris baru di game ini:
+    // satu garis lurus di x 77%, dari y 53% ke y 8% layar, 200 ms, tanpa tahan.
     private val STYLES = listOf(
         Sty(300L, 3.0f, "gesek pelan 3 baris", 0.77f),
-        Sty(183L, 6.0f, "gesek keras + tahan", 0.77f, 700L, true),
+        Sty(200L, 0f, "gesek keras (cara auto clicker: 53% ke 8%, 200ms)", 0.77f, 0L, true, 0.53f, 0.08f),
         Sty(280L, 3.0f, "gesek pelan 3 baris (ulang)", 0.76f),
-        Sty(170L, 6.5f, "gesek keras tanpa tahan", 0.77f, 0L, true),
+        Sty(200L, 0f, "gesek keras 66% ke 8%", 0.77f, 0L, true, 0.66f, 0.08f),
         Sty(260L, 3.0f, "gesek pelan tengah", 0.60f),
-        Sty(183L, 6.0f, "gesek keras + tahan tengah", 0.60f, 700L, true)
+        Sty(200L, 0f, "gesek keras 53% ke 18%", 0.77f, 0L, true, 0.53f, 0.18f)
     )
 
     // true setelah daftar mentok (bergerak kurang dari 1,2 baris): geseran berikutnya langsung keras
@@ -899,12 +901,13 @@ object Engine {
         for (attempt in 0 until minOf(maxTry, seq.size)) {
             val idx = seq[attempt]
             val st = STYLES[idx]
+            val fixedY = st.y0f >= 0f && forward
             val x0 = s.w * st.xf
-            val x1 = s.w * (st.xf + (if (st.hard) -0.02f else 0.02f))
-            val y0 = if (forward) s.h * 0.66f else s.h * 0.38f
+            val x1 = if (fixedY) x0 else s.w * (st.xf + (if (st.hard) -0.02f else 0.02f))
+            val y0 = if (fixedY) s.h * st.y0f else if (forward) s.h * 0.66f else s.h * 0.38f
             val maxD = if (forward) y0 - s.h * 0.06f else s.h * 0.90f - y0
             val dist = minOf(st.rows * rh, maxD)
-            val y1 = if (forward) y0 - dist else y0 + dist
+            val y1 = if (fixedY) s.h * st.y1f else if (forward) y0 - dist else y0 + dist
             if (st.hold > 0L) doSwipeHold(x0, y0, x1, y1, st.ms, st.hold, "geser daftar (" + st.name + ")")
             else doSwipe(x0, y0, x1, y1, st.ms, "geser daftar (" + st.name + ")")
             sleepMs(if (st.hard) 700 else 450)
@@ -1952,6 +1955,21 @@ object Engine {
 
     private class Var(val name: String, val prep: (() -> Unit)?, val run: () -> Unit)
 
+    // Kembali ke Pengaturan Akun lalu buka Daftar Karakter lagi: daftar baru selalu berisi 5 baris awal
+    private fun freshList(): Scr? {
+        val s = cap(R_SERVER)
+        if (isServerList(s)) tapArrow(s)
+        val t0 = now()
+        while (now() - t0 < 8000L) {
+            val a = cap(R_AKUN)
+            if (isAccount(a)) {
+                val l = accountToList(a)
+                if (l != null) return l
+            }
+        }
+        return null
+    }
+
     private fun resetTop(topKey: String): Boolean {
         for (i in 0 until 6) {
             val s = cap(R_SERVER)
@@ -2033,6 +2051,13 @@ object Engine {
         log("DIAGNOSA GESER: awal terlihat " + rangeText(first) + ", server saat ini " + readCurrent(s0) + ", tinggi baris " + rh.toInt() + " px")
         val h = s0.h.toFloat()
         val w = s0.w.toFloat()
+        // Isi awal daftar = 5 baris. Satu gesekan pelan dari atas membuat baris ke-5 terlihat penuh,
+        // jadi baris ke-5 dihitung bagian dari isi awal (bukan "baris baru yang dimuat").
+        val initialKeys = HashSet<String>(first.keys)
+        doSwipe(w * 0.77f, h * 0.66f, w * 0.79f, h * 0.66f - 3.0f * rh, 300, "pelan awal")
+        sleepMs(1000)
+        initialKeys.addAll(serverNums(cap(R_SERVER)).keys)
+        log("DIAGNOSA GESER: isi awal daftar (5 baris): " + initialKeys.sorted().joinToString(","))
         val slow = { x: Float -> doSwipe(w * x, h * 0.66f, w * (x + 0.02f), h * 0.66f - 3.0f * rh, 300, "pelan") }
         fun hard(x: Float, holdMs: Long, ms: Long) {
             if (holdMs > 0L) doSwipeHold(w * x, h * 0.66f, w * (x - 0.02f), h * 0.66f - 6.0f * rh, ms, holdMs, "keras")
@@ -2041,41 +2066,40 @@ object Engine {
         val prep = { slow(0.77f) }
         // Setiap uji: gesekan pelan dulu (tanpa dihitung), baru gesekan yang diuji. "Baris baru" dihitung
         // dari baris yang terlihat SESUDAH gesekan pelan, jadi gesekan pelan sendiri tidak dihitung berhasil.
+        fun sw(x: Float, y0f: Float, y1f: Float, ms: Long) = doSwipe(w * x, h * y0f, w * x, h * y1f, ms, "uji")
         val tests = listOf(
-            Var("A keras 183ms (6 baris) + tahan 700ms, x77%", prep) { hard(0.77f, 700, 183) },
-            Var("B keras 170ms tanpa tahan, x77%", prep) { hard(0.77f, 0, 170) },
-            Var("C langsung keras + tahan dari posisi atas, tanpa pelan dulu", null) { hard(0.77f, 700, 183) },
-            Var("D keras + tahan di x60%", { slow(0.60f) }) { hard(0.60f, 700, 183) },
-            Var("E lebih kencang 120ms + tahan 1000ms, x77%", prep) { hard(0.77f, 1000, 120) },
-            Var("F sedang 350ms, 6 baris, tanpa tahan, x77%", prep) { hard(0.77f, 0, 350) },
-            Var("G lambat 600ms, 6 baris, x77%", prep) { hard(0.77f, 0, 600) },
-            Var("H dua gesekan keras beruntun (jeda 500ms), x77%", prep) {
-                hard(0.77f, 0, 170)
-                sleepMs(500)
-                hard(0.77f, 0, 170)
+            Var("T1 meniru auto clicker: x77%, 53% ke 8%, 200ms, dari posisi atas", null) { sw(0.77f, 0.53f, 0.08f, 200) },
+            Var("T2 sama dengan T1, tapi sesudah gesekan pelan dulu", prep) { sw(0.77f, 0.53f, 0.08f, 200) },
+            Var("T3 cara lama: 66% ke 18%, 200ms", null) { sw(0.77f, 0.66f, 0.18f, 200) },
+            Var("T4 mulai 53% berakhir 18%, 200ms", null) { sw(0.77f, 0.53f, 0.18f, 200) },
+            Var("T5 mulai 66% berakhir 8%, 200ms", null) { sw(0.77f, 0.66f, 0.08f, 200) },
+            Var("T6 dua gesekan T1 beruntun (jeda 100ms)", null) {
+                sw(0.77f, 0.53f, 0.08f, 200)
+                sleepMs(100)
+                sw(0.77f, 0.53f, 0.08f, 200)
             }
         )
-        var winner = ""
+        val hasil = ArrayList<String>()
         for (t in tests) {
             alive()
-            val topOk = resetTop(topKey)
+            val fresh = freshList()
+            if (fresh == null) {
+                log("DIAGNOSA GESER: gagal membuka ulang Daftar Karakter, uji dihentikan")
+                break
+            }
             if (t.prep != null) {
                 t.prep.invoke()
                 sleepMs(1000)
             }
             val sBase = cap(R_SERVER)
-            val base = serverNums(sBase).keys.toSet()
-            log("DIAGNOSA GESER uji " + t.name + " (mulai: " + rangeText(serverNums(sBase)) + (if (topOk) "" else ", PERINGATAN: reset ke atas belum pasti") + ")")
-            val grew = sampleDuring(base, t.run)
-            if (grew) {
-                winner = t.name
-                log("DIAGNOSA GESER: BERHASIL, baris baru muncul dengan: " + t.name)
-                break
-            } else {
-                log("DIAGNOSA GESER: " + t.name + " tidak memunculkan baris baru")
-            }
+            log("DIAGNOSA GESER uji " + t.name + " (mulai dari daftar baru: " + rangeText(serverNums(sBase)) + ")")
+            val grew = sampleDuring(initialKeys, t.run)
+            val hs = t.name + " => " + (if (grew) "MEMUAT BARIS BARU" else "tidak memuat baris baru")
+            log("DIAGNOSA GESER: " + hs)
+            hasil.add(hs)
         }
-        if (winner.isEmpty()) log("DIAGNOSA GESER: tidak ada gesekan yang memunculkan baris baru")
+        log("DIAGNOSA GESER: RINGKASAN")
+        for (h2 in hasil) log("  " + h2)
         log("DIAGNOSA GESER: selesai")
     }
 
