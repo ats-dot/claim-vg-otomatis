@@ -113,6 +113,21 @@ object Engine {
         app?.let { KeepAliveService.stop(it) }
     }
 
+    // Mode kecepatan hasil Diagnosa: 0 biasa, 1 titik melayang, 2 titik melayang + prioritas OCR tinggi
+    private fun applyPerf() {
+        val m = if (Prefs.dotAuto) Prefs.perfMode else 0
+        Ocr.useFast = m >= 2
+        if (m >= 1) {
+            ClaimService.inst?.dot(true)
+            log("Mode kecepatan " + m + ": titik melayang aktif" + (if (m >= 2) " + prioritas OCR tinggi" else ""))
+        }
+    }
+
+    private fun releasePerf() {
+        Ocr.useFast = false
+        ClaimService.inst?.dot(false)
+    }
+
     private fun runMain() {
         val ctx = app ?: return
         try {
@@ -122,6 +137,7 @@ object Engine {
         } catch (_: Throwable) {
         }
         try {
+            applyPerf()
             main()
             status = "Selesai"
             log("SELESAI. Server terklaim hari ini: " + doneCount + " dari " + total)
@@ -140,6 +156,7 @@ object Engine {
             showBanner(true)
         } finally {
             running = false
+            releasePerf()
             app?.let { KeepAliveService.stop(it) }
             try {
                 wl?.release()
@@ -725,29 +742,34 @@ object Engine {
 
     private var styleIdx = 0
 
-    // Gaya geser: (durasi ms, jarak dalam jumlah baris, nama). Gaya yang berhasil diingat dan dipakai lebih dulu.
+    // Gaya geser. xf = posisi x (pecahan lebar layar). Gaya pertama meniru gerakan jari pada rekaman:
+    // di sisi kanan daftar (x sekitar 78%), cepat (sekitar 0,2 detik), naik sekitar 20% tinggi layar.
+    private class Sty(val ms: Long, val rows: Float, val name: String, val xf: Float)
+
     private val STYLES = listOf(
-        Triple(700L, 2.0f, "tarik pelan"),
-        Triple(220L, 3.0f, "lempar cepat"),
-        Triple(450L, 4.0f, "tarik sedang"),
-        Triple(150L, 5.0f, "lempar kencang")
+        Sty(200L, 3.0f, "niru jari kanan", 0.78f),
+        Sty(350L, 3.0f, "jari kanan agak pelan", 0.78f),
+        Sty(200L, 3.0f, "tengah cepat", 0.50f),
+        Sty(200L, 3.0f, "kiri cepat", 0.25f),
+        Sty(700L, 2.0f, "tarik pelan tengah", 0.50f)
     )
 
     // Geser daftar satu langkah dan BUKTIKAN daftarnya bergerak (posisi baris yang sama bergeser).
     // moved=false setelah semua gaya geser dicoba = benar-benar ujung daftar.
-    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 4): Step {
+    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 5): Step {
         val before = serverNums(s)
         val rh = rowH(s)
         var cur = s
         var lost = false
-        val x = s.w * 0.5f
         for (attempt in 0 until maxTry) {
             val idx = (styleIdx + attempt) % STYLES.size
             val st = STYLES[idx]
-            val dist = minOf(st.second * rh, s.h * 0.40f)
-            val y0 = if (forward) s.h * 0.66f else s.h * 0.30f
+            val dist = minOf(st.rows * rh, s.h * 0.40f)
+            val x0 = s.w * st.xf
+            val x1 = s.w * (st.xf + 0.02f)
+            val y0 = if (forward) s.h * 0.64f else s.h * 0.30f
             val y1 = if (forward) y0 - dist else y0 + dist
-            doSwipe(x, y0, x, y1, st.first, "geser daftar (" + st.third + ")")
+            doSwipe(x0, y0, x1, y1, st.ms, "geser daftar (" + st.name + ")")
             sleepS(1.0)
             scrollNo++
             var after = serverNums(cap(R_SERVER).also { cur = it })
@@ -755,7 +777,7 @@ object Engine {
                 after = serverNums(cap(R_SERVER).also { cur = it })
             }
             if (after.isEmpty()) {
-                log("Geseran " + scrollNo + " (" + tag + "): daftar tidak terbaca setelah geser (" + st.third + ")")
+                log("Geseran " + scrollNo + " (" + tag + "): daftar tidak terbaca setelah geser (" + st.name + ")")
                 lost = true
                 continue
             }
@@ -769,8 +791,8 @@ object Engine {
                 break
             }
             if (common == null) {
-                log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.third + " terlalu jauh, baris mungkin terlewat. Geser balik")
-                doSwipe(x, y1, x, y0, st.first, "geser balik")
+                log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " terlalu jauh, baris mungkin terlewat. Geser balik")
+                doSwipe(x1, y1, x0, y0, st.ms, "geser balik")
                 sleepS(1.0)
                 cur = cap(R_SERVER)
                 lost = true
@@ -779,10 +801,10 @@ object Engine {
             val shift = Math.abs(before[common]!!.cy - after[common]!!.cy)
             if (shift >= rh * 0.4f) {
                 styleIdx = idx
-                log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.third + ", terlihat " + rangeText(after) + ", bergerak " + String.format("%.1f", shift / rh) + " baris")
+                log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " (x " + (st.xf * 100).toInt() + "%), terlihat " + rangeText(after) + ", bergerak " + String.format("%.1f", shift / rh) + " baris")
                 return Step(cur, true, false)
             }
-            log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.third + " (" + st.first + " ms, " + st.second + " baris) TIDAK menggerakkan daftar (bergerak " + String.format("%.1f", shift / rh) + " baris), coba gaya lain")
+            log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " (x " + (st.xf * 100).toInt() + "%, " + st.ms + " ms) TIDAK menggerakkan daftar (bergerak " + String.format("%.1f", shift / rh) + " baris), coba gaya lain")
             lost = false
         }
         return Step(cur, false, lost)
@@ -1590,6 +1612,8 @@ object Engine {
         finishAction()
     }
 
+    private var lastAvg = 0L
+
     private fun timeOcr(bmp: Bitmap, r: Rect?): String {
         val ts = ArrayList<Long>()
         var n = 0
@@ -1600,6 +1624,7 @@ object Engine {
             if (l == null) return "OCR gagal"
             n = l.size
         }
+        lastAvg = ts.sum() / ts.size
         return ts.joinToString(", ") + " ms (rata-rata " + (ts.sum() / ts.size) + " ms, " + n + " baris)"
     }
 
@@ -1637,6 +1662,41 @@ object Engine {
     }
 
     // Pengukuran Tahap 1: OCR layar penuh vs area kecil, uji screenshot, status baterai
+    // Uji prioritas: bandingkan kecepatan OCR pada screenshot yang SAMA dalam 3 mode.
+    // Hasilnya disimpan sebagai Prefs.perfMode dan dipakai otomatis saat klaim.
+    private fun diagPriority(bmp: Bitmap) {
+        log("DIAGNOSA: uji prioritas OCR (layar penuh 3x + menu kiri 3x per mode, skala " + Prefs.ocrScale + "%)")
+        val svc = ClaimService.inst
+        val res = LongArray(3)
+        try {
+            for (mode in 1..3) {
+                alive()
+                Ocr.useFast = (mode == 3)
+                if (mode >= 2) {
+                    svc?.dot(true)
+                    sleepS(1.5)
+                }
+                val a = timeOcr(bmp, null)
+                res[mode - 1] = lastAvg
+                val b = timeOcr(bmp, rect(bmp, R_MENU))
+                val nm = if (mode == 1) "biasa" else if (mode == 2) "titik melayang" else "titik melayang + prioritas OCR"
+                log("DIAGNOSA mode " + mode + " (" + nm + "): layar penuh " + a + " | menu kiri " + b)
+            }
+        } finally {
+            Ocr.useFast = false
+            svc?.dot(false)
+        }
+        var best = 0
+        for (i in 1..2) if (res[i] > 0 && res[i] < res[best]) best = i
+        if (best != 0 && res[best] < res[0] * 0.75) {
+            Prefs.perfMode = best
+            log("DIAGNOSA: mode " + (best + 1) + " lebih cepat (" + res[best] + " ms vs " + res[0] + " ms biasa). Dipakai otomatis saat klaim (saklar di Beranda).")
+        } else {
+            Prefs.perfMode = 0
+            log("DIAGNOSA: tidak ada mode yang jauh lebih cepat dari biasa (" + res[0] + ", " + res[1] + ", " + res[2] + " ms). Klaim memakai mode biasa.")
+        }
+    }
+
     private fun diagExtra(ctx: Context, s: Scr) {
         try {
             val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -1650,22 +1710,10 @@ object Engine {
             log("  #" + i + ": " + (if (b != null) "ok" else "GAGAL") + " " + (now() - t0) + " ms")
             sleepMs(450)
         }
-        log("DIAGNOSA: uji kecepatan OCR (3x tiap area, skala " + Prefs.ocrScale + "%)")
-        log("  layar penuh (100%): " + timeOcr(s.bmp, null))
-        val regs = listOf(
-            Pair("menu kiri", R_MENU), Pair("panel kanan", R_PANEL), Pair("tengah-bawah (OK)", R_OK),
-            Pair("profil", R_PROFIL), Pair("akun", R_AKUN), Pair("daftar server", R_SERVER),
-            Pair("strip bawah", R_BOTTOM), Pair("strip atas", R_TOP)
-        )
-        for (pr in regs) {
-            val r = pr.second
-            val pct = ((r.x1 - r.x0) * (r.y1 - r.y0) * 100).toInt()
-            log("  area " + pr.first + " (" + pct + "% layar): " + timeOcr(s.bmp, rect(s.bmp, r)))
-        }
+        diagPriority(s.bmp)
         val rl = Ocr.read(s.bmp, rect(s.bmp, R_ROLE), 100)
         val rid = if (rl != null) parseRole(rl) else null
         log("DIAGNOSA: Role (ID akun) dari strip kanan atas: " + (rid ?: "tidak terbaca (normal kalau bukan layar Memuat Game)"))
-        diagStrips(s.bmp)
     }
 
     fun diagnose(ctx: Context) {
