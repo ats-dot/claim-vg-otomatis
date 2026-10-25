@@ -31,6 +31,11 @@ object Prefs {
         get() = s().getBoolean("close_game", true)
         set(v) { s().edit().putBoolean("close_game", v).apply() }
 
+    // Aksi setelah selesai: 1 = kembali ke VG Klaim, 2 = ke Home, 3 = tetap di game
+    var afterDone: Int
+        get() = s().getInt("after_done", 1)
+        set(v) { s().edit().putInt("after_done", v).apply() }
+
     var showAll: Boolean
         get() = s().getBoolean("show_all", false)
         set(v) { s().edit().putBoolean("show_all", v).apply() }
