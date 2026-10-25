@@ -47,6 +47,7 @@ object Engine {
     private var lastTapX = -1000f
     private var lastTapY = -1000f
     private var lastTapT = 0L
+    private var lastTapWhy = ""
     private var minGap = 345L
     private var darkTaps = 0
 
@@ -344,7 +345,7 @@ object Engine {
     private fun tapXY(x: Float, y: Float, why: String, repeat: Boolean = false) {
         alive()
         val dt = now() - lastTapT
-        if (!repeat && dt < 700L && Math.abs(x - lastTapX) < 60f && Math.abs(y - lastTapY) < 60f) {
+        if (!repeat && dt < 700L && why == lastTapWhy && Math.abs(x - lastTapX) < 60f && Math.abs(y - lastTapY) < 60f) {
             log("Ketukan dobel dibatalkan (" + why + ", " + dt + " ms setelah ketukan di titik sama)")
             sleepMs(150)
             return
@@ -365,6 +366,7 @@ object Engine {
         lastTapX = x
         lastTapY = y
         lastTapT = now()
+        lastTapWhy = why
         lastActive = now()
         stepWait()
     }
@@ -529,7 +531,20 @@ object Engine {
         }
     }
 
-    private fun isAccount(s: Scr): Boolean = s.has("pusatakun", "gantiakun", "pengaturanakun")
+    // Layar Pengaturan Akun: ada tombol "Pusat Akun"/"Ganti Akun", atau judul "PENGATURAN AKUN" di bagian atas.
+    // (Di layar Profil, "Pengaturan Akun" hanyalah tab di sisi kiri bawah.)
+    private fun isAccount(s: Scr): Boolean {
+        if (s.has("pusatakun", "gantiakun")) return true
+        return s.lines.any { it.norm.contains("pengaturanakun") && it.cy < s.h * 0.12f }
+    }
+
+    // Tab menuju Pengaturan Akun di layar Profil (namanya "Akun" di versi lama, "Pengaturan Akun" di versi baru)
+    private fun akunTab(a: Scr): Pair<Float, Float> {
+        val l = a.lines.firstOrNull { it.norm.contains("pengaturanakun") && it.cx < a.w * 0.25f }
+            ?: a.lines.firstOrNull { it.norm == "pengaturan" && it.cx < a.w * 0.25f && it.cy > a.h * 0.5f }
+            ?: a.lines.firstOrNull { it.norm == "akun" && it.cx < a.w * 0.25f && it.cy > a.h * 0.5f }
+        return if (l != null) Pair(l.cx, l.cy) else Pair(a.w * 0.105f, a.h * 0.745f)
+    }
 
     private fun isProfile(s: Scr): Boolean =
         s.has("youthcare", "kartunama") || (s.has("album") && s.has("riwayat"))
@@ -856,17 +871,18 @@ object Engine {
     private class Sty(val ms: Long, val rows: Float, val name: String, val xf: Float, val hold: Long = 0L)
 
     private val STYLES = listOf(
-        Sty(200L, 3.0f, "niru jari + tahan", 0.78f, 600L),
+        Sty(130L, 3.5f, "gesek cepat 130ms", 0.60f),
+        Sty(100L, 4.0f, "gesek sangat cepat 100ms", 0.60f),
+        Sty(170L, 3.5f, "gesek cepat 170ms kanan", 0.78f),
         Sty(200L, 3.0f, "tarik cepat kanan", 0.78f),
-        Sty(350L, 3.0f, "kanan agak pelan + tahan", 0.78f, 400L),
-        Sty(200L, 3.0f, "tengah cepat", 0.50f),
+        Sty(200L, 3.0f, "niru jari + tahan", 0.78f, 600L),
         Sty(200L, 3.0f, "kiri cepat", 0.25f),
         Sty(700L, 2.0f, "tarik pelan tengah", 0.50f)
     )
 
     // Geser daftar satu langkah dan BUKTIKAN daftarnya bergerak (posisi baris yang sama bergeser).
     // moved=false setelah semua gaya geser dicoba = benar-benar ujung daftar.
-    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 6): Step {
+    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 7): Step {
         val before = serverNums(s)
         val rh = rowH(s)
         var cur = s
@@ -877,7 +893,7 @@ object Engine {
             val dist = minOf(st.rows * rh, s.h * 0.40f)
             val x0 = s.w * st.xf
             val x1 = s.w * (st.xf + 0.02f)
-            val y0 = if (forward) s.h * 0.64f else s.h * 0.30f
+            val y0 = if (forward) s.h * 0.64f else s.h * 0.38f
             val y1 = if (forward) y0 - dist else y0 + dist
             if (st.hold > 0L) doSwipeHold(x0, y0, x1, y1, st.ms, st.hold, "geser daftar (" + st.name + ")")
             else doSwipe(x0, y0, x1, y1, st.ms, "geser daftar (" + st.name + ")")
@@ -910,7 +926,23 @@ object Engine {
                 continue
             }
             val shift = Math.abs(before[common]!!.cy - after[common]!!.cy)
-            if (shift >= rh * 0.4f) {
+            val grew = after.keys.any { !before.containsKey(it) }
+            if (shift < rh * 0.4f && !grew) {
+                // Baris baru bisa dimuat beberapa saat setelah tarikan: tunggu sebentar lalu baca ulang
+                sleepMs(1200)
+                val a2 = serverNums(cap(R_SERVER).also { cur = it })
+                if (a2.isNotEmpty()) {
+                    val g2 = a2.keys.any { !before.containsKey(it) }
+                    val c2 = a2.keys.firstOrNull { before.containsKey(it) }
+                    val sh2 = if (c2 != null) Math.abs(before[c2]!!.cy - a2[c2]!!.cy) else 999f
+                    if (g2 || sh2 >= rh * 0.4f) {
+                        styleIdx = idx
+                        log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + ", baris baru muncul setelah menunggu: " + rangeText(a2))
+                        return Step(cur, true, false)
+                    }
+                }
+            }
+            if (shift >= rh * 0.4f || grew) {
                 styleIdx = idx
                 log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " (x " + (st.xf * 100).toInt() + "%), terlihat " + rangeText(after) + ", bergerak " + String.format("%.1f", shift / rh) + " baris")
                 return Step(cur, true, false)
@@ -980,13 +1012,8 @@ object Engine {
     // Layar Profil (dibaca area kiri): baca ID, ketuk Akun, tunggu Pengaturan Akun
     private fun profileToList(p: Scr): Scr? {
         readProfileInfo(p)
-        val ak = p.exact("akun")
-        if (ak == null) {
-            log("Menu Akun tidak terbaca di layar Profil, kembali")
-            back()
-            return null
-        }
-        tapLine(ak, "Akun")
+        val tab = akunTab(p)
+        tapXY(tab.first, tab.second, "tab Pengaturan Akun", true)
         sleepS(1.0)
         // Kalau screenshot gagal berulang di sini, cadangan: ketuk posisi tetap Ganti Server
         setBlind(0.807f, 0.676f, "Ganti Server (posisi tetap, layar Pengaturan Akun tidak bisa dibaca)")
@@ -1011,7 +1038,8 @@ object Engine {
             if (isAccount(a)) return accountToList(a)
             if (isServerList(a)) return a
             if (isProfile(a)) {
-                tapXY(a.w * 0.105f, a.h * 0.745f, "Akun (posisi tetap)", true)
+                val tab = akunTab(a)
+                tapXY(tab.first, tab.second, "tab Pengaturan Akun", true)
             } else if (isLobby(a)) {
                 if (darkPopupX(a)) continue
                 if (now() - lastAv > 1500L) {
@@ -1843,83 +1871,119 @@ object Engine {
         }
     }
 
-    // Selisih posisi baris yang sama (dalam satuan baris). null = tidak ada baris yang sama.
-    private fun shiftRows(before: Map<String, Line>, after: Map<String, Line>, rh: Float): Float? {
-        for (k in after.keys) {
-            val b = before[k] ?: continue
-            return Math.abs(b.cy - after[k]!!.cy) / rh
-        }
-        return null
-    }
-
-    private fun resetTop(first: Set<String>) {
-        for (i in 0 until 5) {
-            val s = cap(R_SERVER)
-            val n = serverNums(s)
-            if (n.isNotEmpty() && first.contains(n.keys.first())) return
-            doSwipe(s.w * 0.78f, s.h * 0.30f, s.w * 0.80f, s.h * 0.65f, 200, "kembali ke atas")
-            sleepMs(900)
-        }
-    }
-
     private class Var(val name: String, val run: () -> Unit)
 
-    // Diagnosa geser: coba beberapa cara menggeser di Daftar Karakter dan catat hasilnya
+    private fun resetTop(topKey: String): Boolean {
+        for (i in 0 until 6) {
+            val s = cap(R_SERVER)
+            val n = serverNums(s)
+            if (n.isNotEmpty() && n.keys.first() == topKey) return true
+            val rh = rowH(s)
+            doSwipe(s.w * 0.60f, s.h * 0.38f, s.w * 0.60f, s.h * 0.38f + 3.5f * rh, 130, "kembali ke atas")
+            sleepMs(900)
+        }
+        return false
+    }
+
+    // Geser ke ujung bawah daftar (berhenti kalau daftar tidak bergerak lagi)
+    private fun reachEnd() {
+        for (i in 0 until 5) {
+            val s = cap(R_SERVER)
+            val before = serverNums(s)
+            val rh = rowH(s)
+            doSwipe(s.w * 0.60f, s.h * 0.64f, s.w * 0.60f, s.h * 0.64f - 3.5f * rh, 130, "ke ujung")
+            sleepMs(900)
+            val after = serverNums(cap(R_SERVER))
+            val grew = after.keys.any { !before.containsKey(it) }
+            val c = after.keys.firstOrNull { before.containsKey(it) }
+            val sh = if (c != null) Math.abs(before[c]!!.cy - after[c]!!.cy) else 999f
+            if (sh < rh * 0.4f && !grew) return
+        }
+    }
+
+    private fun frameLine(t0: Long, s: Scr, base: Set<String>): String {
+        val n = serverNums(s)
+        val last = n.values.maxByOrNull { it.cy }
+        val first = n.values.minByOrNull { it.cy }
+        val baru = n.keys.filter { !base.contains(it) }
+        return "    +" + (now() - t0) + " ms: " + rangeText(n) +
+            ", baris pertama y=" + (if (first != null) (first.cy * 100 / s.h).toInt() else -1) +
+            "%, terakhir y=" + (if (last != null) (last.cy * 100 / s.h).toInt() else -1) + "%" +
+            (if (baru.isNotEmpty()) ", BARU: " + baru.joinToString(",") else "")
+    }
+
+    // Jalankan gesekan di thread lain sambil memotret daftar sekitar 2x per detik
+    private fun sampleDuring(base: Set<String>, act: () -> Unit): Boolean {
+        val t0 = now()
+        val th = Thread {
+            try {
+                act()
+            } catch (e: Throwable) {
+                log("DIAGNOSA GESER: gesekan error " + e.javaClass.simpleName)
+            }
+        }
+        th.isDaemon = true
+        th.start()
+        var grew = false
+        while (true) {
+            val s = cap(R_SERVER)
+            val n = serverNums(s)
+            log(frameLine(t0, s, base))
+            if (n.keys.any { !base.contains(it) }) grew = true
+            val el = now() - t0
+            if (!th.isAlive && el >= 3500L) break
+            if (el > 12_000L) break
+        }
+        return grew
+    }
+
+    // Diagnosa geser v2: dari ujung daftar, coba gesekan cepat tanpa tahan (seperti jari)
+    // dan catat apa yang terjadi selama dan sesudah gesekan.
     private fun diagScroll(s0: Scr) {
-        log("DIAGNOSA GESER: layar " + s0.w + "x" + s0.h + ", " + s0.lines.size + " baris teks")
+        log("DIAGNOSA GESER v2: layar " + s0.w + "x" + s0.h + ", " + s0.lines.size + " baris teks")
         if (!isServerList(s0)) {
             log("DIAGNOSA GESER: ini bukan Daftar Karakter (teks: " + s0.all.take(100) + "). Buka Daftar Karakter lalu ulangi.")
             return
         }
         val first = serverNums(s0)
-        val firstKeys = first.keys.toSet()
+        if (first.isEmpty()) {
+            log("DIAGNOSA GESER: tidak ada baris server terbaca")
+            return
+        }
+        val topKey = first.keys.first()
         val rh = rowH(s0)
         log("DIAGNOSA GESER: awal terlihat " + rangeText(first) + ", server saat ini " + readCurrent(s0) + ", tinggi baris " + rh.toInt() + " px")
-        val svc = ClaimService.inst
         val h = s0.h.toFloat()
         val w = s0.w.toFloat()
-        val d3 = 3 * rh
-        val variants = listOf(
-            Var("1 cepat 200ms x78%, tanpa tahan") { doSwipe(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 200, "v1") },
-            Var("2 cepat 200ms x78% + tahan 600ms") { doSwipeHold(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 200, 600, "v2") },
-            Var("3 cepat 200ms x50% + tahan 600ms") { doSwipeHold(w * 0.50f, h * 0.64f, w * 0.52f, h * 0.64f - d3, 200, 600, "v3") },
-            Var("4 pelan 1500ms x78%") { doSwipe(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 1500, "v4") },
-            Var("5 dua gesekan cepat beruntun x78%") {
-                doSwipe(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 200, "v5a")
-                sleepMs(800)
-                doSwipe(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 200, "v5b")
+        val tests = listOf(
+            Var("A gesek sangat cepat 100ms, 4 baris, x60%") { doSwipe(w * 0.60f, h * 0.64f, w * 0.60f, h * 0.64f - 4.0f * rh, 100, "A") },
+            Var("B gesek cepat 130ms, 3,5 baris, x60%") { doSwipe(w * 0.60f, h * 0.64f, w * 0.60f, h * 0.64f - 3.5f * rh, 130, "B") },
+            Var("C gesek cepat 170ms, 3,5 baris, x78%") { doSwipe(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - 3.5f * rh, 170, "C") },
+            Var("D dua gesekan 130ms, jeda 400ms, x60%") {
+                doSwipe(w * 0.60f, h * 0.64f, w * 0.60f, h * 0.64f - 3.5f * rh, 130, "D1")
+                sleepMs(400)
+                doSwipe(w * 0.60f, h * 0.64f, w * 0.60f, h * 0.64f - 3.5f * rh, 130, "D2")
             },
-            Var("6 cepat 200ms x25%") { doSwipe(w * 0.25f, h * 0.64f, w * 0.27f, h * 0.64f - d3, 200, "v6") },
-            Var("7 panjang 40% tinggi 200ms x78% + tahan 600ms") { doSwipeHold(w * 0.78f, h * 0.66f, w * 0.80f, h * 0.26f, 200, 600, "v7") },
-            Var("8 tahan 1200ms di ujung x78%") { doSwipeHold(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - d3, 200, 1200, "v8") },
-            Var("9 ketuk baris paling bawah 3x") {
-                val n = serverNums(cap(R_SERVER))
-                val last = n.values.maxByOrNull { it.cy }
-                if (last != null) {
-                    for (i in 0 until 3) {
-                        tapXY(last.cx, last.cy, "baris bawah " + (i + 1) + "/3", true)
-                        sleepMs(700)
-                    }
-                }
-            }
+            Var("E gesek 130ms, 40% tinggi layar, x60%") { doSwipe(w * 0.60f, h * 0.66f, w * 0.60f, h * 0.26f, 130, "E") },
+            Var("F ketuk panah kecil di bawah tombol Ganti Server") { tapXY(w * 0.50f, h * 0.87f, "panah bawah", true) }
         )
-        for (v in variants) {
+        var winner = ""
+        for (t in tests) {
             alive()
-            resetTop(firstKeys)
-            val before = serverNums(cap(R_SERVER))
-            v.run()
-            sleepMs(1000)
-            val a1 = serverNums(cap(R_SERVER))
-            val sh1 = shiftRows(before, a1, rh)
-            sleepMs(2500)
-            val a2 = serverNums(cap(R_SERVER))
-            val sh2 = shiftRows(before, a2, rh)
-            val t1 = if (sh1 == null) "tanpa baris sama (lompat jauh)" else "bergerak " + String.format("%.1f", sh1) + " baris"
-            val grew = a2.keys.size != a1.keys.size || a2.keys.joinToString(",") != a1.keys.joinToString(",")
-            log("DIAGNOSA GESER " + v.name + ": 1 dtk sesudah: " + rangeText(a1) + ", " + t1 +
-                " | 3,5 dtk sesudah: " + rangeText(a2) + (if (grew) " (BERUBAH setelah menunggu)" else " (sama)"))
+            val topOk = resetTop(topKey)
+            reachEnd()
+            val base = serverNums(cap(R_SERVER)).keys.toSet()
+            log("DIAGNOSA GESER uji " + t.name + " (mulai dari ujung: " + rangeText(serverNums(cap(R_SERVER))) + (if (topOk) "" else ", PERINGATAN: reset ke atas belum pasti") + ")")
+            val grew = sampleDuring(base, t.run)
+            if (grew) {
+                winner = t.name
+                log("DIAGNOSA GESER: BERHASIL, baris baru muncul dengan: " + t.name)
+                break
+            } else {
+                log("DIAGNOSA GESER: " + t.name + " tidak memunculkan baris baru")
+            }
         }
-        resetTop(firstKeys)
+        if (winner.isEmpty()) log("DIAGNOSA GESER: tidak ada gesekan yang memunculkan baris baru")
         log("DIAGNOSA GESER: selesai")
     }
 
