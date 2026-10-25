@@ -122,15 +122,19 @@ object Engine {
             main()
             status = "Selesai"
             log("SELESAI. Server terklaim hari ini: " + doneCount + " dari " + total)
+            showBanner(false)
         } catch (e: Stop) {
             status = "Berhenti"
             log("Berhenti: " + e.message)
+            showBanner(true)
         } catch (e: InterruptedException) {
             status = "Berhenti"
             log("Dihentikan")
+            showBanner(true)
         } catch (e: Throwable) {
             status = "Error"
             log("Error: " + e.toString())
+            showBanner(true)
         } finally {
             running = false
             app?.let { KeepAliveService.stop(it) }
@@ -350,7 +354,7 @@ object Engine {
         val hdr = s.find("semuaserver")
         val minY: Float = hdr?.cy ?: -1f
         val sorted = s.lines
-            .filter { it.cy > minY && SRV.containsMatchIn(it.norm) }
+            .filter { it.cy > minY && it.cy > s.h * 0.17f && it.cy < s.h * 0.70f && SRV.containsMatchIn(it.norm) }
             .sortedWith(compareBy({ (it.cy / 40f).toInt() }, { it.cx }))
         val m = LinkedHashMap<String, Line>()
         for (l in sorted) {
@@ -659,43 +663,88 @@ object Engine {
         sleepS(0.8)
     }
 
-    private fun scrollList(s: Scr, forward: Boolean, frac: Float = 0.26f) {
-        val x = s.w * 0.5f
-        val a = s.h * 0.62f
-        val b = s.h * (0.62f - frac)
-        if (forward) slowSwipe(x, a, x, b) else slowSwipe(x, b, x, a)
+    private class Step(val scr: Scr, val moved: Boolean, val lost: Boolean)
+
+    private var scrollNo = 0
+
+    // Tinggi satu baris server (piksel), dari jarak antar baris yang terbaca
+    private fun rowH(s: Scr): Float {
+        val ys = serverNums(s).values.map { it.cy }.sorted()
+        if (ys.size < 2) return s.h * 0.08f
+        val d = ArrayList<Float>()
+        for (i in 1 until ys.size) d.add(ys[i] - ys[i - 1])
+        d.sort()
+        return d[d.size / 2].coerceIn(s.h * 0.05f, s.h * 0.12f)
     }
 
-    // Geser daftar. Kalau tidak ada satu pun server yang sama antara sebelum dan sesudah
-    // geser, berarti ada baris yang terlewat: geser balik lalu coba lagi dengan jarak lebih pendek.
-    private fun scrollSafe(s: Scr, forward: Boolean): Scr {
+    private fun rangeText(m: Map<String, Line>): String {
+        val k = m.keys.toList()
+        return if (k.isEmpty()) "kosong" else if (k.size == 1) k[0] else k[0] + " sampai " + k[k.size - 1] + " (" + k.size + " baris)"
+    }
+
+    // Geser daftar satu langkah dan BUKTIKAN daftarnya bergerak (posisi baris yang sama bergeser).
+    // moved=false setelah beberapa geseran berbeda = benar-benar ujung daftar.
+    private fun scrollStep(s: Scr, forward: Boolean, tag: String): Step {
+        val before = serverNums(s)
+        val rh = rowH(s)
+        val rows = (before.size - 2).coerceIn(1, 5)
         var cur = s
-        var frac = 0.26f
-        for (attempt in 0 until 3) {
-            val before = serverNums(cur).keys.toSet()
-            scrollList(cur, forward, frac)
-            val n = cap(R_SERVER)
-            val after = serverNums(n).keys
-            if (before.isEmpty() || after.isEmpty() || before.any { it in after }) return n
-            log("Tarikan terlalu jauh (baris terlewat), kembali dan tarik lebih pendek")
-            scrollList(n, !forward, frac)
-            cur = cap(R_SERVER)
-            frac *= 0.6f
+        var factor = 1.0f
+        var lost = false
+        val x = s.w * 0.5f
+        for (attempt in 0 until 4) {
+            val dist = minOf(rows * rh * factor, s.h * 0.40f)
+            val y0 = if (forward) s.h * 0.66f else s.h * 0.30f
+            val y1 = if (forward) y0 - dist else y0 + dist
+            slowSwipe(x, y0, x, y1)
+            scrollNo++
+            var after = serverNums(cap(R_SERVER).also { cur = it })
+            if (after.isEmpty()) {
+                after = serverNums(cap(R_SERVER).also { cur = it })
+            }
+            if (after.isEmpty()) {
+                log("Geseran " + scrollNo + " (" + tag + "): daftar tidak terbaca setelah geser")
+                lost = true
+                continue
+            }
+            if (before.isEmpty()) {
+                log("Geseran " + scrollNo + " (" + tag + "): terlihat " + rangeText(after) + " (tidak bisa diverifikasi, daftar sebelumnya kosong)")
+                return Step(cur, true, false)
+            }
+            var common: String? = null
+            for (k in after.keys) if (before.containsKey(k)) {
+                common = k
+                break
+            }
+            if (common == null) {
+                // Terlalu jauh: ada baris yang terlewat. Geser balik, lalu coba lebih pendek
+                log("Geseran " + scrollNo + " (" + tag + "): terlalu jauh, baris mungkin terlewat. Kembali dan geser lebih pendek")
+                doSwipe(x, y1, x, y0, 700, "geser balik")
+                sleepS(0.8)
+                cur = cap(R_SERVER)
+                factor *= 0.6f
+                lost = true
+                continue
+            }
+            val shift = Math.abs(before[common]!!.cy - after[common]!!.cy)
+            if (shift >= rh * 0.4f) {
+                log("Geseran " + scrollNo + " (" + tag + "): terlihat " + rangeText(after) + ", bergerak " + String.format("%.1f", shift / rh) + " baris")
+                return Step(cur, true, false)
+            }
+            log("Geseran " + scrollNo + " (" + tag + "): daftar TIDAK bergerak (percobaan " + (attempt + 1) + "/4), geser lebih panjang")
+            factor = minOf(factor * 1.8f, 3.0f)
+            lost = false
         }
-        return cur
+        return Step(cur, false, lost)
     }
 
-    private fun sig(s: Scr): String = serverNums(s).keys.joinToString(",")
-
-    // Geser daftar ke paling atas (berhenti kalau isi layar tidak berubah lagi)
+    // Geser daftar ke paling atas (berhenti kalau daftar tidak bergerak lagi)
     private fun scrollTop(first: Scr): Scr {
         var s = first
-        var last = ""
-        for (i in 0 until 14) {
-            val g = sig(s)
-            if (g == last) break
-            last = g
-            s = scrollSafe(s, false)
+        for (i in 0 until 25) {
+            val st = scrollStep(s, false, "ke atas")
+            s = st.scr
+            if (!st.moved) break
         }
         return s
     }
@@ -809,47 +858,52 @@ object Engine {
 
     private fun readAll(first: Scr) {
         var s = scrollTop(first)
-        var stagn = 0
-        for (page in 0 until 25) {
-            var added = 0
+        val want = Prefs.serverCount
+        var why = "batas halaman"
+        for (page in 0 until 60) {
+            alive()
             for ((n, _) in serverNums(s)) {
-                if (!order.contains(n)) {
-                    order.add(n)
-                    added++
-                }
+                if (!order.contains(n)) order.add(n)
             }
             val c = readCurrent(s)
             if (c != null) cur = c
-            if (added == 0) {
-                stagn++
-                if (stagn >= 2) break
-            } else stagn = 0
-            s = scrollSafe(s, true)
+            if (want > 0 && order.size >= want) {
+                why = "jumlah " + want + " tercapai"
+                break
+            }
+            val st = scrollStep(s, true, "baca daftar")
+            s = st.scr
+            if (!st.moved) {
+                why = if (st.lost) "geseran gagal atau melewati baris (daftar mungkin tidak utuh)" else "ujung daftar"
+                for ((n, _) in serverNums(s)) {
+                    if (!order.contains(n)) order.add(n)
+                }
+                break
+            }
         }
-        log("Server terbaca: " + order.size + " (" + order.joinToString(",") + ")")
+        log("Server terbaca: " + order.size + " (" + order.joinToString(",") + "). Berhenti membaca: " + why)
+        if (want > 0 && order.size < want) {
+            log("Peringatan: diisi " + want + " server, baru terbaca " + order.size)
+        }
     }
 
     private fun pickNext(): String? {
         var s = openServerList()
-        val downOnly = Prefs.skipAbove
-        if (!downOnly) s = scrollTop(s)
-        var stagn = 0
-        var lastSig = ""
-        for (page in 0 until 30) {
-            val nums = serverNums(s)
-            for ((n, _) in nums) {
+        if (!Prefs.skipAbove) s = scrollTop(s)
+        for (page in 0 until 60) {
+            alive()
+            for ((n, _) in serverNums(s)) {
                 if (!isDone(n) && n != cur) {
                     if (!order.contains(n)) order.add(n)
                     return n
                 }
             }
-            val sig = nums.keys.joinToString(",")
-            if (sig == lastSig) {
-                stagn++
-                if (stagn >= 2) break
-            } else stagn = 0
-            lastSig = sig
-            s = scrollSafe(s, true)
+            val st = scrollStep(s, true, "cari server berikutnya")
+            s = st.scr
+            if (!st.moved) {
+                log(if (st.lost) "Peringatan: geseran gagal, daftar mungkin belum habis" else "Ujung daftar: tidak ada server yang belum selesai")
+                break
+            }
         }
         return null
     }
@@ -861,21 +915,16 @@ object Engine {
         if (!isServerList(s)) s = openServerList()
         var found: Line? = null
         for (pass in 0 until 2) {
-            var stagn = 0
-            var lastSig = ""
-            for (page in 0 until 30) {
+            for (page in 0 until 60) {
+                alive()
                 val l = serverNums(s)[name]
                 if (l != null) {
                     found = l
                     break
                 }
-                val sig = serverNums(s).keys.joinToString(",")
-                if (sig == lastSig) {
-                    stagn++
-                    if (stagn >= 2) break
-                } else stagn = 0
-                lastSig = sig
-                s = scrollSafe(s, pass == 0)
+                val st = scrollStep(s, pass == 0, "cari " + name)
+                s = st.scr
+                if (!st.moved) break
             }
             if (found != null) break
         }
@@ -1213,6 +1262,53 @@ object Engine {
         log("Server " + name + " selesai. Progres " + doneCount + "/" + total)
     }
 
+    private fun openOwnApp() {
+        val c = app ?: return
+        val i = Intent(c, MainActivity::class.java)
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        val ctx: Context = ClaimService.inst ?: c
+        ctx.startActivity(i)
+    }
+
+    // Pilihan "Setelah selesai": 1 = kembali ke VG Klaim, 2 = ke Home, 3 = tetap di game
+    private fun finishAction() {
+        val mode = Prefs.afterDone
+        val svc = ClaimService.inst
+        if (mode == 3) {
+            log("Setelah selesai: tetap di game")
+            try {
+                backToLobby()
+            } catch (e: Stop) {
+                log("Tidak bisa kembali ke lobby: " + e.message)
+            }
+            return
+        }
+        if (Prefs.closeGame) closeApp() else svc?.home()
+        if (mode == 1) {
+            sleepS(0.8)
+            log("Setelah selesai: kembali ke VG Klaim")
+            openOwnApp()
+        } else {
+            log("Setelah selesai: ke Home")
+        }
+    }
+
+    private fun doneText(stopped: Boolean): String {
+        val n = done.size
+        val t = if (total > 0) total else n
+        val sk = if (skipped.isNotEmpty()) " (" + skipped.size + " dilewati)" else ""
+        if (stopped) return "Berhenti: " + n + " dari " + t + " server diklaim" + sk
+        if (n >= t) return "Selesai, " + n + " server telah diklaim"
+        return "Selesai: " + n + " dari " + t + " server diklaim" + sk
+    }
+
+    private fun showBanner(stopped: Boolean) {
+        try {
+            ClaimService.inst?.banner(doneText(stopped))
+        } catch (_: Throwable) {
+        }
+    }
+
     private fun main() {
         val ctx = app ?: throw Stop("Aplikasi tidak siap")
         gamePkg = findGame(ctx) ?: throw Stop("Game MLBB tidak ditemukan. Pilih game di Beranda.")
@@ -1300,7 +1396,7 @@ object Engine {
             log("Akun " + acct + " selesai semua. Akun yang selesai hari ini: " +
                 Prefs.accountsDoneToday().joinToString(", "))
         }
-        if (Prefs.closeGame) closeApp() else backToLobby()
+        finishAction()
     }
 
     private fun timeOcr(bmp: Bitmap, r: Rect?): String {
