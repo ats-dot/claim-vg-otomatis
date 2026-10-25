@@ -50,7 +50,7 @@ object Ocr {
     // Null = OCR gagal (jangan dianggap layar kosong). Kalau region diisi, hanya area itu yang dibaca
     // (lebih cepat); posisi baris dikembalikan ke koordinat layar penuh.
     // Gambar diperkecil sesuai Prefs.ocrScale.
-    fun read(bmp: Bitmap, region: Rect? = null): List<Line>? {
+    fun read(bmp: Bitmap, region: Rect? = null, scalePct: Int? = null): List<Line>? {
         var small: Bitmap? = null
         return try {
             val ox = region?.left ?: 0
@@ -60,7 +60,7 @@ object Ocr {
             } else {
                 bmp
             }
-            val sc = Prefs.ocrScale.coerceIn(30, 100) / 100f
+            val sc = (scalePct ?: Prefs.ocrScale).coerceIn(30, 100) / 100f
             val src: Bitmap
             val f: Float
             if (sc < 0.99f) {
