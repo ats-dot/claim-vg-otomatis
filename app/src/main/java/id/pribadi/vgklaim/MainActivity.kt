@@ -228,6 +228,11 @@ class MainActivity : Activity() {
 
         col.addView(btn("MULAI KLAIM") {
             Prefs.serverCount = cnt.text.toString().trim().toIntOrNull() ?: 0
+            if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 11)
+            }
             val r = Engine.start(applicationContext)
             if (r != null) toast(r) else toast("Klaim dimulai")
         }, lp(16))
@@ -323,6 +328,25 @@ class MainActivity : Activity() {
         col.addView(btn("1. Buka Pengaturan Aksesibilitas") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }, lp())
+        val bat = tv("", 12f, false, true)
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            bat.text = "Pengecualian baterai: " + (if (pm.isIgnoringBatteryOptimizations(packageName)) "SUDAH" else "BELUM")
+        } catch (e: Exception) {
+            bat.text = "Pengecualian baterai: tidak diketahui"
+        }
+        col.addView(bat, lp(6))
+        col.addView(btn("2. Buka pengaturan baterai (pilih VG Klaim: tanpa batasan)") {
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (e: Exception) {
+                toast("Tidak bisa dibuka: " + e.javaClass.simpleName)
+            }
+        }, lp(6))
+        col.addView(
+            tv("Di OriginOS cek juga: Setelan HP > Baterai > Penggunaan latar belakang > VG Klaim > izinkan / tanpa batasan.", 12f, false, true),
+            lp(6)
+        )
         col.addView(btn("Ulangi dari awal (hapus catatan server selesai hari ini)") {
             Prefs.resetDone()
             toast("Catatan dihapus")
