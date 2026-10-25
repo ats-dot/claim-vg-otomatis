@@ -2,10 +2,22 @@ package id.pribadi.vgklaim
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
 import android.view.Display
+import android.view.Gravity
+import android.view.WindowManager
+import android.widget.TextView
 import android.view.accessibility.AccessibilityEvent
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -122,6 +134,66 @@ class ClaimService : AccessibilityService() {
         }
         lastShotError = ""
         return b
+    }
+
+    private val ui = Handler(Looper.getMainLooper())
+
+    // Banner melayang di atas layar apa pun (hitam putih), hilang sendiri. Tanpa izin tambahan.
+    fun banner(text: String, ms: Long = 10000L) {
+        notifyDone(text)
+        ui.post {
+            try {
+                val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                val d = resources.displayMetrics.density
+                val tv = TextView(this)
+                tv.text = text
+                tv.setTextColor(Color.WHITE)
+                tv.textSize = 15f
+                tv.gravity = Gravity.CENTER
+                tv.setPadding((20 * d).toInt(), (12 * d).toInt(), (20 * d).toInt(), (12 * d).toInt())
+                val bg = GradientDrawable()
+                bg.setColor(Color.BLACK)
+                bg.setStroke(maxOf(1, d.toInt()), Color.WHITE)
+                bg.cornerRadius = 16 * d
+                tv.background = bg
+                val lp = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    PixelFormat.TRANSLUCENT
+                )
+                lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                lp.y = (40 * d).toInt()
+                wm.addView(tv, lp)
+                ui.postDelayed({
+                    try {
+                        wm.removeView(tv)
+                    } catch (_: Throwable) {
+                    }
+                }, ms)
+            } catch (e: Throwable) {
+                AppLog.add("Banner gagal: " + e.javaClass.simpleName + " " + e.message)
+            }
+        }
+    }
+
+    // Cadangan kalau banner tidak tampil: notifikasi biasa
+    private fun notifyDone(text: String) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(
+                NotificationChannel("vgklaim_selesai", "Hasil klaim", NotificationManager.IMPORTANCE_HIGH)
+            )
+            val n = Notification.Builder(this, "vgklaim_selesai")
+                .setContentTitle("VG Klaim")
+                .setContentText(text)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(2, n)
+        } catch (_: Throwable) {
+        }
     }
 
     fun tap(x: Float, y: Float): Boolean {
