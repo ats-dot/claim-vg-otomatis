@@ -1950,7 +1950,7 @@ object Engine {
         }
     }
 
-    private class Var(val name: String, val run: () -> Unit)
+    private class Var(val name: String, val prep: (() -> Unit)?, val run: () -> Unit)
 
     private fun resetTop(topKey: String): Boolean {
         for (i in 0 until 6) {
@@ -1963,19 +1963,25 @@ object Engine {
         return false
     }
 
-    private fun frameLine(t0: Long, s: Scr, base: Set<String>): String {
+    private fun frameLine(t0: Long, s: Scr, base: Set<String>, baseLastY: Int): String {
         val n = serverNums(s)
         val last = n.values.maxByOrNull { it.cy }
         val first = n.values.minByOrNull { it.cy }
         val baru = n.keys.filter { !base.contains(it) }
+        val lastY = if (last != null) (last.cy * 100 / s.h).toInt() else -1
+        val melar = lastY in 0 until (baseLastY - 3)
         return "    +" + (now() - t0) + " ms: " + rangeText(n) +
             ", baris pertama y=" + (if (first != null) (first.cy * 100 / s.h).toInt() else -1) +
-            "%, terakhir y=" + (if (last != null) (last.cy * 100 / s.h).toInt() else -1) + "%" +
+            "%, terakhir y=" + lastY + "%" +
+            (if (melar) " (DAFTAR MELAR/tertarik melewati ujung)" else "") +
             (if (baru.isNotEmpty()) ", BARU: " + baru.joinToString(",") else "")
     }
 
     // Jalankan gesekan di thread lain sambil memotret daftar sekitar 2x per detik
     private fun sampleDuring(base: Set<String>, act: () -> Unit): Boolean {
+        val s0 = cap(R_SERVER)
+        val l0 = serverNums(s0).values.maxByOrNull { it.cy }
+        val baseLastY = if (l0 != null) (l0.cy * 100 / s0.h).toInt() else 100
         val t0 = now()
         val th = Thread {
             try {
@@ -1990,7 +1996,7 @@ object Engine {
         while (true) {
             val s = cap(R_SERVER)
             val n = serverNums(s)
-            log(frameLine(t0, s, base))
+            log(frameLine(t0, s, base, baseLastY))
             if (n.keys.any { !base.contains(it) }) grew = true
             val el = now() - t0
             if (!th.isAlive && el >= 3000L) break
@@ -2030,39 +2036,36 @@ object Engine {
         val slow = { x: Float -> doSwipe(w * x, h * 0.66f, w * (x + 0.02f), h * 0.66f - 3.0f * rh, 300, "pelan") }
         fun hard(x: Float, holdMs: Long, ms: Long) {
             if (holdMs > 0L) doSwipeHold(w * x, h * 0.66f, w * (x - 0.02f), h * 0.66f - 6.0f * rh, ms, holdMs, "keras")
-            else doSwipe(w * x, h * 0.66f, w * (x - 0.02f), h * 0.66f - 6.5f * rh, ms, "keras")
+            else doSwipe(w * x, h * 0.66f, w * (x - 0.02f), h * 0.66f - 6.0f * rh, ms, "keras")
         }
+        val prep = { slow(0.77f) }
+        // Setiap uji: gesekan pelan dulu (tanpa dihitung), baru gesekan yang diuji. "Baris baru" dihitung
+        // dari baris yang terlihat SESUDAH gesekan pelan, jadi gesekan pelan sendiri tidak dihitung berhasil.
         val tests = listOf(
-            Var("A protokol: pelan 300ms, lalu keras 183ms (6 baris) + tahan 700ms, x77%") {
-                slow(0.77f)
-                sleepMs(700)
-                hard(0.77f, 700, 183)
-            },
-            Var("B protokol tanpa tahan: pelan lalu keras 170ms, x77%") {
-                slow(0.77f)
-                sleepMs(700)
+            Var("A keras 183ms (6 baris) + tahan 700ms, x77%", prep) { hard(0.77f, 700, 183) },
+            Var("B keras 170ms tanpa tahan, x77%", prep) { hard(0.77f, 0, 170) },
+            Var("C langsung keras + tahan dari posisi atas, tanpa pelan dulu", null) { hard(0.77f, 700, 183) },
+            Var("D keras + tahan di x60%", { slow(0.60f) }) { hard(0.60f, 700, 183) },
+            Var("E lebih kencang 120ms + tahan 1000ms, x77%", prep) { hard(0.77f, 1000, 120) },
+            Var("F sedang 350ms, 6 baris, tanpa tahan, x77%", prep) { hard(0.77f, 0, 350) },
+            Var("G lambat 600ms, 6 baris, x77%", prep) { hard(0.77f, 0, 600) },
+            Var("H dua gesekan keras beruntun (jeda 500ms), x77%", prep) {
                 hard(0.77f, 0, 170)
-            },
-            Var("C langsung keras + tahan dari posisi atas (tanpa pelan dulu)") {
-                hard(0.77f, 700, 183)
-            },
-            Var("D protokol di x60%: pelan lalu keras + tahan") {
-                slow(0.60f)
-                sleepMs(700)
-                hard(0.60f, 700, 183)
-            },
-            Var("E pelan lalu keras lebih kencang 120ms + tahan 1000ms, x77%") {
-                slow(0.77f)
-                sleepMs(700)
-                hard(0.77f, 1000, 120)
+                sleepMs(500)
+                hard(0.77f, 0, 170)
             }
         )
         var winner = ""
         for (t in tests) {
             alive()
             val topOk = resetTop(topKey)
-            val base = serverNums(cap(R_SERVER)).keys.toSet()
-            log("DIAGNOSA GESER uji " + t.name + " (mulai: " + rangeText(serverNums(cap(R_SERVER))) + (if (topOk) "" else ", PERINGATAN: reset ke atas belum pasti") + ")")
+            if (t.prep != null) {
+                t.prep.invoke()
+                sleepMs(1000)
+            }
+            val sBase = cap(R_SERVER)
+            val base = serverNums(sBase).keys.toSet()
+            log("DIAGNOSA GESER uji " + t.name + " (mulai: " + rangeText(serverNums(sBase)) + (if (topOk) "" else ", PERINGATAN: reset ke atas belum pasti") + ")")
             val grew = sampleDuring(base, t.run)
             if (grew) {
                 winner = t.name
