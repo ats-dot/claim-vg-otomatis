@@ -182,8 +182,9 @@ class ClaimService : AccessibilityService() {
     private var dotView: View? = null
 
     // Titik kecil di pojok kiri bawah (tanpa tulisan, tidak bisa disentuh) supaya sistem menganggap
-    // aplikasi ini punya jendela yang terlihat. Dipakai untuk uji kecepatan baca layar.
-    fun dot(on: Boolean) {
+    // aplikasi ini punya jendela yang terlihat. style: 0 hapus, 1 putih 14dp, 2 putih kecil 2dp,
+    // 3 hampir transparan (5%), 4 transparan penuh.
+    fun dot(style: Int) {
         ui.post {
             try {
                 val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -195,7 +196,7 @@ class ClaimService : AccessibilityService() {
                     }
                     dotView = null
                 }
-                if (on) {
+                if (style >= 1) {
                     val d = resources.displayMetrics.density
                     val v = View(this)
                     val bg = GradientDrawable()
@@ -203,7 +204,7 @@ class ClaimService : AccessibilityService() {
                     bg.setColor(Color.WHITE)
                     bg.setStroke(maxOf(1, d.toInt()), Color.BLACK)
                     v.background = bg
-                    val sz = (14 * d).toInt()
+                    val sz = if (style == 2) maxOf(2, (2 * d).toInt()) else (14 * d).toInt()
                     val lp = WindowManager.LayoutParams(
                         sz, sz,
                         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -211,6 +212,8 @@ class ClaimService : AccessibilityService() {
                         PixelFormat.TRANSLUCENT
                     )
                     lp.gravity = Gravity.BOTTOM or Gravity.START
+                    if (style == 3) lp.alpha = 0.05f
+                    if (style == 4) lp.alpha = 0f
                     wm.addView(v, lp)
                     dotView = v
                 }
@@ -263,11 +266,27 @@ class ClaimService : AccessibilityService() {
         if (!performGlobalAction(GLOBAL_ACTION_RECENTS)) AppLog.add("Tombol Recents gagal dikirim ke sistem")
     }
 
-    private fun gesture(p: Path, ms: Long): Boolean {
+    // Tarik cepat lalu tahan jari di ujung (meniru gerakan jari pada rekaman)
+    fun swipeHold(x1: Float, y1: Float, x2: Float, y2: Float, moveMs: Long, holdMs: Long): Boolean {
+        val p1 = Path()
+        p1.moveTo(x1, y1)
+        p1.lineTo(x2, y2)
+        val s1 = GestureDescription.StrokeDescription(p1, 0, moveMs, true)
+        if (!gestureStroke(s1)) return false
+        val p2 = Path()
+        p2.moveTo(x2, y2)
+        val s2 = s1.continueStroke(p2, 0, holdMs, false)
+        return gestureStroke(s2)
+    }
+
+    private fun gesture(p: Path, ms: Long): Boolean =
+        gestureStroke(GestureDescription.StrokeDescription(p, 0, ms))
+
+    private fun gestureStroke(st: GestureDescription.StrokeDescription): Boolean {
         val latch = CountDownLatch(1)
         val ok = AtomicBoolean(false)
         val g = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(p, 0, ms))
+            .addStroke(st)
             .build()
         val sent = try {
             dispatchGesture(
