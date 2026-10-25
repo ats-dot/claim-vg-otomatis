@@ -57,7 +57,8 @@ object Engine {
     private val R_AKUN = Reg(0.62f, 0.10f, 1.0f, 0.95f)    // tombol kanan Pengaturan Akun
     private val R_SERVER = Reg(0.12f, 0.12f, 0.88f, 0.88f) // daftar karakter, tombol emas, popup sistem
     private val R_BOTTOM = Reg(0.0f, 0.80f, 1.0f, 1.0f)    // strip bawah: Memuat Game + menu lobby
-    private val R_TOP = Reg(0.0f, 0.0f, 1.0f, 0.14f)       // strip atas: judul halaman (Pusat Bantuan)
+    private val R_TOP = Reg(0.0f, 0.0f, 1.0f, 0.14f)
+    private val R_ID = Reg(0.20f, 0.14f, 0.50f, 0.26f)     // baris "ID: ... (kode server)" di Profil, dibaca resolusi penuh       // strip atas: judul halaman (Pusat Bantuan)
     private var acct: String = "-"
     private var firstPending = false
     private var lastClaimed: String? = null
@@ -393,9 +394,11 @@ object Engine {
     }
 
     // Layar Profil menulis "ID: 2281758175 (57102)" -> (ID akun, kode server saat ini)
-    private fun parseProfile(s: Scr): Pair<String, String>? {
+    private fun parseProfile(s: Scr): Pair<String, String>? = parseProfileLines(s.lines)
+
+    private fun parseProfileLines(lines: List<Line>): Pair<String, String>? {
         val re = Regex("([0-9]{6,12})\\s*\\(\\s*([0-9]{4,6})\\s*\\)")
-        for (l in s.lines) {
+        for (l in lines) {
             val m = re.find(l.text) ?: continue
             return Pair(m.groupValues[1], "s" + m.groupValues[2])
         }
@@ -403,7 +406,13 @@ object Engine {
     }
 
     private fun readProfileInfo(s: Scr) {
-        val p = parseProfile(s) ?: return
+        val lo = parseProfile(s)
+        val hiLines = Ocr.read(s.bmp, rect(s.bmp, R_ID), 100)
+        val hi = if (hiLines != null) parseProfileLines(hiLines) else null
+        if (hi != null && lo != null && hi != lo) {
+            log("Baca Profil: resolusi penuh " + hi.first + " (" + hi.second + ") beda dengan baca cepat " + lo.first + " (" + lo.second + "). Memakai resolusi penuh")
+        }
+        val p = hi ?: lo ?: return
         setAccount(p.first, "Profil")
         val lc = lastClaimed
         if (lc != null && lc != p.second) {
@@ -682,28 +691,39 @@ object Engine {
         return if (k.isEmpty()) "kosong" else if (k.size == 1) k[0] else k[0] + " sampai " + k[k.size - 1] + " (" + k.size + " baris)"
     }
 
+    private var styleIdx = 0
+
+    // Gaya geser: (durasi ms, jarak dalam jumlah baris, nama). Gaya yang berhasil diingat dan dipakai lebih dulu.
+    private val STYLES = listOf(
+        Triple(700L, 2.0f, "tarik pelan"),
+        Triple(220L, 3.0f, "lempar cepat"),
+        Triple(450L, 4.0f, "tarik sedang"),
+        Triple(150L, 5.0f, "lempar kencang")
+    )
+
     // Geser daftar satu langkah dan BUKTIKAN daftarnya bergerak (posisi baris yang sama bergeser).
-    // moved=false setelah beberapa geseran berbeda = benar-benar ujung daftar.
-    private fun scrollStep(s: Scr, forward: Boolean, tag: String): Step {
+    // moved=false setelah semua gaya geser dicoba = benar-benar ujung daftar.
+    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 4): Step {
         val before = serverNums(s)
         val rh = rowH(s)
-        val rows = (before.size - 2).coerceIn(1, 5)
         var cur = s
-        var factor = 1.0f
         var lost = false
         val x = s.w * 0.5f
-        for (attempt in 0 until 4) {
-            val dist = minOf(rows * rh * factor, s.h * 0.40f)
+        for (attempt in 0 until maxTry) {
+            val idx = (styleIdx + attempt) % STYLES.size
+            val st = STYLES[idx]
+            val dist = minOf(st.second * rh, s.h * 0.40f)
             val y0 = if (forward) s.h * 0.66f else s.h * 0.30f
             val y1 = if (forward) y0 - dist else y0 + dist
-            slowSwipe(x, y0, x, y1)
+            doSwipe(x, y0, x, y1, st.first, "geser daftar (" + st.third + ")")
+            sleepS(1.0)
             scrollNo++
             var after = serverNums(cap(R_SERVER).also { cur = it })
             if (after.isEmpty()) {
                 after = serverNums(cap(R_SERVER).also { cur = it })
             }
             if (after.isEmpty()) {
-                log("Geseran " + scrollNo + " (" + tag + "): daftar tidak terbaca setelah geser")
+                log("Geseran " + scrollNo + " (" + tag + "): daftar tidak terbaca setelah geser (" + st.third + ")")
                 lost = true
                 continue
             }
@@ -717,22 +737,20 @@ object Engine {
                 break
             }
             if (common == null) {
-                // Terlalu jauh: ada baris yang terlewat. Geser balik, lalu coba lebih pendek
-                log("Geseran " + scrollNo + " (" + tag + "): terlalu jauh, baris mungkin terlewat. Kembali dan geser lebih pendek")
-                doSwipe(x, y1, x, y0, 700, "geser balik")
-                sleepS(0.8)
+                log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.third + " terlalu jauh, baris mungkin terlewat. Geser balik")
+                doSwipe(x, y1, x, y0, st.first, "geser balik")
+                sleepS(1.0)
                 cur = cap(R_SERVER)
-                factor *= 0.6f
                 lost = true
                 continue
             }
             val shift = Math.abs(before[common]!!.cy - after[common]!!.cy)
             if (shift >= rh * 0.4f) {
-                log("Geseran " + scrollNo + " (" + tag + "): terlihat " + rangeText(after) + ", bergerak " + String.format("%.1f", shift / rh) + " baris")
+                styleIdx = idx
+                log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.third + ", terlihat " + rangeText(after) + ", bergerak " + String.format("%.1f", shift / rh) + " baris")
                 return Step(cur, true, false)
             }
-            log("Geseran " + scrollNo + " (" + tag + "): daftar TIDAK bergerak (percobaan " + (attempt + 1) + "/4), geser lebih panjang")
-            factor = minOf(factor * 1.8f, 3.0f)
+            log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.third + " (" + st.first + " ms, " + st.second + " baris) TIDAK menggerakkan daftar (bergerak " + String.format("%.1f", shift / rh) + " baris), coba gaya lain")
             lost = false
         }
         return Step(cur, false, lost)
@@ -742,7 +760,7 @@ object Engine {
     private fun scrollTop(first: Scr): Scr {
         var s = first
         for (i in 0 until 25) {
-            val st = scrollStep(s, false, "ke atas")
+            val st = scrollStep(s, false, "ke atas", 1)
             s = st.scr
             if (!st.moved) break
         }
@@ -762,6 +780,22 @@ object Engine {
         tapXY(px, py, "ikon profil (posisi tetap " + px.toInt() + "," + py.toInt() + ")")
     }
 
+    // Tunggu daftar karakter selesai dimuat (bisa beberapa detik kalau jaringan lambat)
+    private fun waitServerList(sec: Double): Scr? {
+        val t0 = now()
+        var logged = false
+        while (now() - t0 < (sec * 1000).toLong()) {
+            val l = cap(R_SERVER)
+            if (isServerList(l)) return l
+            if (!logged) {
+                log("Menunggu daftar karakter dimuat...")
+                logged = true
+            }
+            sleepS(0.5)
+        }
+        return null
+    }
+
     // Layar Pengaturan Akun (dibaca area kanan): ketuk Ganti Server, tunggu daftar karakter
     private fun accountToList(a: Scr): Scr? {
         readAccountId(a)
@@ -772,10 +806,10 @@ object Engine {
             return null
         }
         tapLine(gs, "Ganti Server")
-        sleepS(1.3)
-        val l = cap(R_SERVER)
-        if (isServerList(l)) return l
-        log("Setelah Ganti Server, daftar karakter belum terbaca. Membaca layar penuh")
+        sleepS(1.0)
+        val l = waitServerList(12.0)
+        if (l != null) return l
+        log("Daftar karakter belum terbaca 12 detik setelah Ganti Server")
         return null
     }
 
@@ -808,6 +842,12 @@ object Engine {
         for (attempt in 0 until 10) {
             var s = cap()
             if (isServerList(s)) return s
+            log("Buka daftar server: layar " + (if (isAccount(s)) "Pengaturan Akun" else if (isProfile(s)) "Profil" else if (isLobby(s)) "lobby" else "lain") + " [" + s.all.take(50) + "]")
+            if (s.has("daftarkarakter") && !isAccount(s)) {
+                val w = waitServerList(12.0)
+                if (w != null) return w
+                continue
+            }
             if (isAccount(s)) {
                 val r = accountToList(s)
                 if (r != null) return r
@@ -973,50 +1013,71 @@ object Engine {
         }
     }
 
+    // Tunggu halaman Hadiah terbuka (berhenti segera setelah terlihat)
+    private fun waitEventOpen(sec: Double): Boolean {
+        val t0 = now()
+        while (now() - t0 < (sec * 1000).toLong()) {
+            if (eventOpen(cap(R_EVT))) return true
+            sleepS(0.3)
+        }
+        return false
+    }
+
     private fun openEvent() {
-        for (a in 0 until 6) {
+        var cycles = 0
+        var lastTxt = ""
+        for (a in 0 until 8) {
             val s = cap()
             if (eventOpen(s)) return
             if (popups(s)) continue
+            lastTxt = s.all.take(120)
             if (!isLobby(s)) {
                 // Bukan lobby dan bukan halaman Hadiah: kemungkinan layar Event tab lain
                 // (mis. Festival Pemuda). Ketuk ikon petir untuk pindah ke tab Hadiah.
                 val p = Matcher.findPrefix(s, "petir")
                 if (p != null) {
                     tapXY(p.x, p.y, "tab Hadiah (template petir)")
-                    sleepS(1.5)
+                    if (waitEventOpen(3.5)) return
                     continue
                 }
                 // Tanpa template: posisi ikon petir berpindah-pindah, jadi coba ikon tab
                 // di sisi kiri satu per satu sampai halaman Hadiah terbuka.
                 for (yy in listOf(PETIR_Y, 0.347f, 0.671f, 0.185f)) {
                     tapXY(s.w * PETIR_X, s.h * yy, "ikon tab kiri y=" + (yy * 100).toInt() + "% (cari tab Hadiah)")
-                    sleepS(1.5)
-                    if (eventOpen(cap(R_EVT))) return
+                    if (waitEventOpen(3.0)) return
+                }
+                cycles++
+                log("Halaman Hadiah belum terbuka setelah semua tab dicoba (putaran " + cycles + "). Teks layar: " + lastTxt)
+                if (cycles >= 2) {
+                    cycles = 0
+                    tapArrow(s)
+                    sleepS(1.0)
                 }
                 continue
             }
             val l = s.exact("event")
             if (l != null) {
                 tapLine(l, "Event")
-                sleepS(2.0)
+                if (waitEventOpen(2.5)) return
                 continue
             }
             val h = Matcher.find(s, "event")
             if (h != null) {
                 tapXY(h.x, h.y, "Event (gambar)")
-                sleepS(2.0)
+                if (waitEventOpen(2.5)) return
                 continue
             }
             tapXY(s.w * PETIR_X, s.h * PETIR_Y, "Event (posisi tetap)")
-            sleepS(2.0)
+            if (waitEventOpen(2.5)) return
         }
-        throw Stop("Halaman Hadiah di Event tidak terbuka (jalankan Diagnosa di layar Event)")
+        throw Stop("Halaman Hadiah di Event tidak terbuka. Teks layar terakhir: " + lastTxt)
     }
 
     private fun openMenu(keys: List<String>): Scr? {
+        var seen = ""
         for (i in 0 until 7) {
             val s = cap(R_MENU)
+            seen = s.all
             for (k in keys) {
                 val l = s.find(k)
                 if (l != null) {
@@ -1028,6 +1089,7 @@ object Engine {
             val x = s.w * 0.15f
             if (i < 3) swipe(x, s.h * 0.75f, x, s.h * 0.30f) else swipe(x, s.h * 0.30f, x, s.h * 0.75f)
         }
+        log("Menu " + keys[0] + " tidak ketemu setelah 7 kali baca. Teks menu terakhir: " + seen.take(140))
         return null
     }
 
@@ -1085,8 +1147,10 @@ object Engine {
 
     // Cari menu: baca layar, geser turun SEKALI, baca lagi. Tidak geser naik.
     private fun openMenuQuick(keys: List<String>): Scr? {
+        var seen = ""
         for (i in 0 until 2) {
             val s = cap(R_MENU)
+            seen = s.all
             for (k in keys) {
                 val l = s.find(k)
                 if (l != null) {
@@ -1100,6 +1164,7 @@ object Engine {
                 swipe(x, s.h * 0.75f, x, s.h * 0.30f)
             }
         }
+        log("Menu " + keys[0] + " tidak ketemu. Teks menu terakhir: " + seen.take(140))
         return null
     }
 
@@ -1342,7 +1407,11 @@ object Engine {
         status = "Membaca akun dan daftar server"
         val ls = openServerList()
         if (acct == "-") log("Peringatan: ID akun tidak terbaca, progres disimpan tanpa ID akun")
-        if (cur == null) cur = readCurrent(ls)
+        val rc = readCurrent(ls)
+        if (rc != null) {
+            if (cur != null && cur != rc) log("Peringatan: server dari Profil (" + cur + ") beda dengan daftar karakter (" + rc + "). Memakai daftar karakter")
+            cur = rc
+        }
         if (firstPending) {
             firstPending = false
             val c = cur
