@@ -199,12 +199,19 @@ class ClaimService : AccessibilityService() {
                 if (style >= 1) {
                     val d = resources.displayMetrics.density
                     val v = View(this)
-                    val bg = GradientDrawable()
-                    bg.shape = GradientDrawable.OVAL
-                    bg.setColor(Color.WHITE)
-                    bg.setStroke(maxOf(1, d.toInt()), Color.BLACK)
-                    v.background = bg
-                    val sz = if (style == 2) maxOf(2, (2 * d).toInt()) else (14 * d).toInt()
+                    // gaya 1-3: titik putih (terlihat/hampir transparan); gaya 4-5: tanpa warna sama sekali
+                    if (style <= 3) {
+                        val bg = GradientDrawable()
+                        bg.shape = GradientDrawable.OVAL
+                        bg.setColor(Color.WHITE)
+                        bg.setStroke(maxOf(1, d.toInt()), Color.BLACK)
+                        v.background = bg
+                    }
+                    val sz = when (style) {
+                        2 -> maxOf(2, (2 * d).toInt())
+                        4 -> 1
+                        else -> (14 * d).toInt()
+                    }
                     val lp = WindowManager.LayoutParams(
                         sz, sz,
                         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -213,7 +220,7 @@ class ClaimService : AccessibilityService() {
                     )
                     lp.gravity = Gravity.BOTTOM or Gravity.START
                     if (style == 3) lp.alpha = 0.05f
-                    if (style == 4) lp.alpha = 0f
+                    if (style >= 4) lp.alpha = 0f
                     wm.addView(v, lp)
                     dotView = v
                 }
