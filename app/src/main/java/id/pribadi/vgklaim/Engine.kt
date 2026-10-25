@@ -2067,17 +2067,18 @@ object Engine {
         // Setiap uji: gesekan pelan dulu (tanpa dihitung), baru gesekan yang diuji. "Baris baru" dihitung
         // dari baris yang terlihat SESUDAH gesekan pelan, jadi gesekan pelan sendiri tidak dihitung berhasil.
         fun sw(x: Float, y0f: Float, y1f: Float, ms: Long) = doSwipe(w * x, h * y0f, w * x, h * y1f, ms, "uji")
+        fun seg(x: Float, y0f: Float, y1f: Float, n: Int, segMs: Long) {
+            ClaimService.inst?.swipeSegments(w * x, h * y0f, w * x, h * y1f, n, segMs)
+        }
+        // Semua uji memakai jalur yang sama dengan auto clicker (x 77%, 53% ke 8%). Bedanya hanya
+        // KERAPATAN titik sentuh: satu garis (3 titik) lawan banyak potongan kecil beruntun.
         val tests = listOf(
-            Var("T1 meniru auto clicker: x77%, 53% ke 8%, 200ms, dari posisi atas", null) { sw(0.77f, 0.53f, 0.08f, 200) },
-            Var("T2 sama dengan T1, tapi sesudah gesekan pelan dulu", prep) { sw(0.77f, 0.53f, 0.08f, 200) },
-            Var("T3 cara lama: 66% ke 18%, 200ms", null) { sw(0.77f, 0.66f, 0.18f, 200) },
-            Var("T4 mulai 53% berakhir 18%, 200ms", null) { sw(0.77f, 0.53f, 0.18f, 200) },
-            Var("T5 mulai 66% berakhir 8%, 200ms", null) { sw(0.77f, 0.66f, 0.08f, 200) },
-            Var("T6 dua gesekan T1 beruntun (jeda 100ms)", null) {
-                sw(0.77f, 0.53f, 0.08f, 200)
-                sleepMs(100)
-                sw(0.77f, 0.53f, 0.08f, 200)
-            }
+            Var("T1 (kontrol) satu garis x77%, 53% ke 8%, 200ms", null) { sw(0.77f, 0.53f, 0.08f, 200) },
+            Var("D1 potongan rapat: 8 x 25ms, 53% ke 8%", null) { seg(0.77f, 0.53f, 0.08f, 8, 25) },
+            Var("D2 potongan sangat rapat: 20 x 10ms", null) { seg(0.77f, 0.53f, 0.08f, 20, 10) },
+            Var("D3 potongan lebih jarang: 5 x 40ms", null) { seg(0.77f, 0.53f, 0.08f, 5, 40) },
+            Var("D4 potongan rapat dan lebih lambat: 12 x 40ms", null) { seg(0.77f, 0.53f, 0.08f, 12, 40) },
+            Var("D5 potongan rapat 8 x 25ms, sesudah gesekan pelan dulu", prep) { seg(0.77f, 0.53f, 0.08f, 8, 25) }
         )
         val hasil = ArrayList<String>()
         for (t in tests) {
