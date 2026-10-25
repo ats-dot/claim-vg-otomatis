@@ -222,7 +222,6 @@ class MainActivity : Activity() {
         )
         col.addView(sc, lp())
         col.addView(toggle("Lewati server di atas posisi sekarang", { Prefs.skipAbove }, { Prefs.skipAbove = it }), lp(6))
-        col.addView(toggle("Mode cepat (lewati pemindaian server)", { Prefs.fast }, { Prefs.fast = it }), lp(6))
         col.addView(toggle("Tutup game otomatis setelah selesai", { Prefs.closeGame }, { Prefs.closeGame = it }), lp(6))
         col.addView(toggle("Tampilkan semua aplikasi", { Prefs.showAll }, { Prefs.showAll = it }), lp(6))
         col.addView(toggle("Titik melayang saat klaim (hasil Diagnosa)", { Prefs.dotAuto }, { Prefs.dotAuto = it }), lp(6))
