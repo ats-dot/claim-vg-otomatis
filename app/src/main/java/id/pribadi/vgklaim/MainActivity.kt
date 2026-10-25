@@ -226,6 +226,29 @@ class MainActivity : Activity() {
         col.addView(toggle("Tutup game otomatis setelah selesai", { Prefs.closeGame }, { Prefs.closeGame = it }), lp(6))
         col.addView(toggle("Tampilkan semua aplikasi", { Prefs.showAll }, { Prefs.showAll = it }), lp(6))
 
+        val afterOpts = listOf("1. Kembali ke VG Klaim", "2. Ke Home", "3. Tetap di game")
+        val ar = LinearLayout(this)
+        ar.orientation = LinearLayout.VERTICAL
+        val abtns = ArrayList<Button>()
+        for (k in afterOpts.indices) {
+            val b = Button(this)
+            b.isAllCaps = false
+            b.text = afterOpts[k]
+            b.setOnClickListener {
+                Prefs.afterDone = k + 1
+                for (j in abtns.indices) style(abtns[j], j == k)
+            }
+            style(b, Prefs.afterDone == k + 1)
+            abtns.add(b)
+            ar.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        col.addView(
+            card(
+                tv("Setelah selesai (banner hasil klaim selalu tampil). Pilihan 1 dan 2 mengikuti saklar tutup game di atas.", 12f, false, true),
+                ar
+            ), lp(16)
+        )
+
         col.addView(btn("MULAI KLAIM") {
             Prefs.serverCount = cnt.text.toString().trim().toIntOrNull() ?: 0
             if (android.os.Build.VERSION.SDK_INT >= 33 &&
