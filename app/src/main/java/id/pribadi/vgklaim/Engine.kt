@@ -136,8 +136,9 @@ object Engine {
     private fun dotName(m: Int): String = when (m) {
         1 -> "putih 14 dp"
         2 -> "putih kecil 2 dp"
-        3 -> "hampir transparan 5%"
-        4 -> "transparan penuh"
+        3 -> "putih hampir transparan 5%"
+        4 -> "1 piksel tanpa warna"
+        5 -> "14 dp tanpa warna"
         else -> "tanpa titik"
     }
 
@@ -868,39 +869,45 @@ object Engine {
 
     // Gaya geser. xf = posisi x (pecahan lebar layar). Gaya pertama meniru gerakan jari pada rekaman:
     // di sisi kanan daftar (x sekitar 78%), cepat (sekitar 0,2 detik), naik sekitar 20% tinggi layar.
-    private class Sty(val ms: Long, val rows: Float, val name: String, val xf: Float, val hold: Long = 0L)
+    private class Sty(val ms: Long, val rows: Float, val name: String, val xf: Float, val hold: Long = 0L, val hard: Boolean = false)
 
-    // "Tarik panjang" (sekitar 55% tinggi layar, dari bawah daftar sampai dekat judul, 0,17 detik, x sekitar 77%)
-    // adalah gerakan jari pada video contoh; gerakan ini yang memicu pemuatan baris server baru.
+    // Protokol dari video contoh: (1) geseran pelan menggeser daftar 0,6 baris sampai baris ke-5 penuh;
+    // (2) geseran KERAS (sekitar 6 baris dalam 0,18 detik, jari ditahan di ujung) memuat baris ke-6 dst;
+    // (3) sesudah itu geseran pelan sudah cukup sampai baris terakhir.
     private val STYLES = listOf(
-        Sty(160L, 3.0f, "gesek 3 baris kanan", 0.77f),
-        Sty(170L, 7.0f, "tarik panjang kanan", 0.77f),
-        Sty(130L, 3.5f, "gesek cepat tengah", 0.60f),
-        Sty(170L, 7.0f, "tarik panjang tengah", 0.60f),
-        Sty(200L, 3.0f, "tarik cepat kanan", 0.78f),
-        Sty(200L, 3.0f, "niru jari + tahan", 0.78f, 600L),
-        Sty(700L, 2.0f, "tarik pelan tengah", 0.50f)
+        Sty(300L, 3.0f, "gesek pelan 3 baris", 0.77f),
+        Sty(183L, 6.0f, "gesek keras + tahan", 0.77f, 700L, true),
+        Sty(280L, 3.0f, "gesek pelan 3 baris (ulang)", 0.76f),
+        Sty(170L, 6.5f, "gesek keras tanpa tahan", 0.77f, 0L, true),
+        Sty(260L, 3.0f, "gesek pelan tengah", 0.60f),
+        Sty(183L, 6.0f, "gesek keras + tahan tengah", 0.60f, 700L, true)
     )
+
+    // true setelah daftar mentok (bergerak kurang dari 1,2 baris): geseran berikutnya langsung keras
+    private var hardNext = false
 
     // Geser daftar satu langkah dan BUKTIKAN daftarnya bergerak (posisi baris yang sama bergeser).
     // moved=false setelah semua gaya geser dicoba = benar-benar ujung daftar.
-    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 7): Step {
+    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 6): Step {
         val before = serverNums(s)
         val rh = rowH(s)
         var cur = s
         var lost = false
-        for (attempt in 0 until maxTry) {
-            val idx = (styleIdx + attempt) % STYLES.size
+        val seq: List<Int> = if (!forward) listOf(0, 2, 4)
+        else if (hardNext) listOf(1, 2, 3, 2, 5, 4)
+        else listOf(0, 1, 2, 3, 4, 5)
+        for (attempt in 0 until minOf(maxTry, seq.size)) {
+            val idx = seq[attempt]
             val st = STYLES[idx]
             val x0 = s.w * st.xf
-            val x1 = s.w * (st.xf + 0.02f)
-            val y0 = if (forward) s.h * 0.64f else s.h * 0.38f
+            val x1 = s.w * (st.xf + (if (st.hard) -0.02f else 0.02f))
+            val y0 = if (forward) s.h * 0.66f else s.h * 0.38f
             val maxD = if (forward) y0 - s.h * 0.06f else s.h * 0.90f - y0
             val dist = minOf(st.rows * rh, maxD)
             val y1 = if (forward) y0 - dist else y0 + dist
             if (st.hold > 0L) doSwipeHold(x0, y0, x1, y1, st.ms, st.hold, "geser daftar (" + st.name + ")")
             else doSwipe(x0, y0, x1, y1, st.ms, "geser daftar (" + st.name + ")")
-            sleepMs(500)
+            sleepMs(if (st.hard) 700 else 450)
             scrollNo++
             var after = serverNums(cap(R_SERVER).also { cur = it })
             if (after.isEmpty()) {
@@ -915,12 +922,29 @@ object Engine {
                 log("Geseran " + scrollNo + " (" + tag + "): terlihat " + rangeText(after) + " (tidak bisa diverifikasi, daftar sebelumnya kosong)")
                 return Step(cur, true, false)
             }
-            var common: String? = null
-            for (k in after.keys) if (before.containsKey(k)) {
-                common = k
-                break
-            }
-            if (common == null) {
+            val common0 = after.keys.firstOrNull { before.containsKey(it) }
+            if (common0 == null) {
+                if (st.hard && forward) {
+                    // Gesekan keras memuat baris baru dan daftar melompat jauh: geser balik pelan sampai ada baris yang sama
+                    log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " melompat ke " + rangeText(after) + " (baris baru dimuat). Geser balik pelan sampai ada baris yang sama")
+                    var synced = false
+                    var k = 0
+                    while (k < 5 && !synced) {
+                        doSwipe(s.w * 0.77f, s.h * 0.38f, s.w * 0.79f, s.h * 0.38f + minOf(3f * rh, s.h * 0.52f), 280, "geser balik pelan")
+                        sleepMs(500)
+                        val b2 = serverNums(cap(R_SERVER).also { cur = it })
+                        if (b2.isNotEmpty() && b2.keys.any { before.containsKey(it) }) synced = true
+                        k++
+                    }
+                    if (!synced) {
+                        log("Geseran " + scrollNo + " (" + tag + "): tidak ketemu baris yang sama setelah geser balik")
+                        lost = true
+                        continue
+                    }
+                    hardNext = false
+                    log("Geseran " + scrollNo + " (" + tag + "): sinkron lagi, baris baru sudah dimuat; lanjut geseran pelan")
+                    continue
+                }
                 log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " terlalu jauh, baris mungkin terlewat. Geser balik")
                 doSwipe(x1, y1, x0, y0, st.ms, "geser balik")
                 sleepMs(500)
@@ -928,11 +952,11 @@ object Engine {
                 lost = true
                 continue
             }
-            val shift = Math.abs(before[common]!!.cy - after[common]!!.cy)
+            val shift = Math.abs(before[common0]!!.cy - after[common0]!!.cy)
             val grew = after.keys.any { !before.containsKey(it) }
             if (shift < rh * 0.4f && !grew) {
-                // Baris baru bisa dimuat beberapa saat setelah tarikan: tunggu sebentar lalu baca ulang
-                sleepMs(1200)
+                // Baris baru bisa dimuat beberapa saat setelah geseran: tunggu sebentar lalu baca ulang
+                sleepMs(900)
                 val a2 = serverNums(cap(R_SERVER).also { cur = it })
                 if (a2.isNotEmpty()) {
                     val g2 = a2.keys.any { !before.containsKey(it) }
@@ -940,6 +964,7 @@ object Engine {
                     val sh2 = if (c2 != null) Math.abs(before[c2]!!.cy - a2[c2]!!.cy) else 999f
                     if (g2 || sh2 >= rh * 0.4f) {
                         styleIdx = idx
+                        hardNext = false
                         log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + ", baris baru muncul setelah menunggu: " + rangeText(a2))
                         return Step(cur, true, false)
                     }
@@ -947,10 +972,11 @@ object Engine {
             }
             if (shift >= rh * 0.4f || grew) {
                 styleIdx = idx
-                log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " (x " + (st.xf * 100).toInt() + "%), terlihat " + rangeText(after) + ", bergerak " + String.format("%.1f", shift / rh) + " baris")
+                hardNext = (!st.hard) && shift < rh * 1.2f
+                log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + ", terlihat " + rangeText(after) + ", bergerak " + String.format("%.1f", shift / rh) + " baris" + (if (hardNext) " (mentok, berikutnya gesekan keras)" else ""))
                 return Step(cur, true, false)
             }
-            log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " (x " + (st.xf * 100).toInt() + "%, " + st.ms + " ms) TIDAK menggerakkan daftar (bergerak " + String.format("%.1f", shift / rh) + " baris), coba gaya lain")
+            log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " TIDAK menggerakkan daftar (bergerak " + String.format("%.1f", shift / rh) + " baris), coba gaya lain")
             lost = false
         }
         return Step(cur, false, lost)
@@ -1127,7 +1153,8 @@ object Engine {
     }
 
     private fun readAll(first: Scr) {
-        var s = scrollTop(first)
+        hardNext = false
+        var s = first
         val want = Prefs.serverCount
         var why = "batas halaman"
         for (page in 0 until 60) {
@@ -1158,6 +1185,7 @@ object Engine {
     }
 
     private fun pickNext(): String? {
+        hardNext = false
         var s = openServerList()
         val rc = readCurrent(s)
         if (rc != null) {
@@ -1171,7 +1199,8 @@ object Engine {
             lastClaimed = null
             cur = rc
         }
-        if (!Prefs.skipAbove) s = scrollTop(s)
+        // Daftar yang baru dibuka selalu di posisi atas: ambil server paling atas yang belum selesai,
+        // dan baru menggeser kalau semua server yang terlihat sudah selesai.
         for (page in 0 until 60) {
             alive()
             for ((n, _) in serverNums(s)) {
@@ -1193,6 +1222,7 @@ object Engine {
     private fun switchTo(name: String) {
         log("Ganti server -> " + name)
         status = "Ganti server " + name
+        hardNext = false
         var s = cap(R_SERVER)
         if (!isServerList(s)) s = openServerList()
         var found: Line? = null
@@ -1218,9 +1248,32 @@ object Engine {
         settleLobby()
     }
 
+    // Tombol OK: abu-abu = masih memuat (belum bisa ditekan), emas/coklat = siap. Diukur dari warna di kiri
+    // dan kanan tulisan OK (merah jauh lebih tinggi dari biru pada tombol emas).
+    private fun okDiff(s: Scr, b: Line): Int {
+        var r = 0
+        var bl = 0
+        var n = 0
+        val bmp = s.bmp
+        for (dx in intArrayOf(-110, -90, 90, 110)) {
+            for (dy in intArrayOf(-14, 0, 14)) {
+                val x = (b.cx + dx).toInt()
+                val y = (b.cy + dy).toInt()
+                if (x < 0 || y < 0 || x >= bmp.width || y >= bmp.height) continue
+                val c = bmp.getPixel(x, y)
+                r += (c shr 16) and 255
+                bl += c and 255
+                n++
+            }
+        }
+        return if (n == 0) 999 else (r - bl) / n
+    }
+
     private fun confirmSwitch() {
         var gsTaps = 0
         var lastGs = 0L
+        var okSeen = 0L
+        var okGrayLogged = false
         val t0 = now()
         while (now() - t0 < 25_000L) {
             val s = cap(R_SERVER)
@@ -1232,7 +1285,16 @@ object Engine {
             if (s.has("pemberitahuansistem", "melakukanrestart", "restartgame", "servertelahdiganti")) {
                 val b = s.exact("ok") ?: s.exact("konfirmasi") ?: s.exact("ya")
                 if (b != null) {
-                    tapLine(b, "OK (server telah diganti)")
+                    val diff = okDiff(s, b)
+                    if (okSeen == 0L) okSeen = now()
+                    if (diff <= 35 && now() - okSeen < 6000L) {
+                        if (!okGrayLogged) {
+                            okGrayLogged = true
+                            log("Tombol OK masih abu-abu (memuat, selisih merah-biru " + diff + "), menunggu sampai emas")
+                        }
+                        continue
+                    }
+                    tapLine(b, "OK (server telah diganti, selisih merah-biru " + diff + ")")
                     // tunggu popup hilang atau game mulai restart; ulangi OK kalau popup masih terlihat
                     val t1 = now()
                     var retap = 0
@@ -1752,7 +1814,8 @@ object Engine {
         }
 
         val want = Prefs.serverCount
-        if (!Prefs.fast || want <= 0) {
+        if (want <= 0) {
+            // Jumlah server tidak diisi: baru perlu menghitung server di daftar. Kalau diisi, tidak ada pemindaian.
             readAll(ls)
         }
         val c0 = cur
@@ -1847,25 +1910,38 @@ object Engine {
     // Uji gaya titik melayang: bandingkan kecepatan OCR pada screenshot yang SAMA.
     // Gaya yang paling tidak terlihat tetapi masih jauh lebih cepat disimpan sebagai Prefs.dotStyle.
     private fun diagPriority(bmp: Bitmap) {
-        log("DIAGNOSA: uji gaya titik melayang (layar penuh 3x + menu kiri 3x per gaya, skala " + Prefs.ocrScale + "%)")
+        log("DIAGNOSA: uji gaya titik melayang (layar penuh 3x + menu kiri 3x per gaya, skala " + Prefs.ocrScale + "%). Gaya putih terlihat hanya dicoba kalau gaya tanpa warna tidak membantu.")
         val svc = ClaimService.inst
-        val res = LongArray(5)
+        val res = LongArray(6)
+        fun measure(m: Int) {
+            alive()
+            svc?.dot(m)
+            if (m >= 1) sleepS(1.5)
+            val a = timeOcr(bmp, null)
+            res[m] = lastAvg
+            val b = timeOcr(bmp, rect(bmp, R_MENU))
+            log("DIAGNOSA gaya " + m + " (" + dotName(m) + "): layar penuh " + a + " | menu kiri " + b)
+        }
+        var best = 0
         try {
-            for (m in 0..4) {
-                alive()
-                svc?.dot(m)
-                sleepS(1.5)
-                val a = timeOcr(bmp, null)
-                res[m] = lastAvg
-                val b = timeOcr(bmp, rect(bmp, R_MENU))
-                log("DIAGNOSA gaya " + m + " (" + dotName(m) + "): layar penuh " + a + " | menu kiri " + b)
+            measure(0)
+            measure(5)
+            measure(4)
+            if (res[5] > 0 && res[5] < res[0] * 0.75) best = 5
+            else if (res[4] > 0 && res[4] < res[0] * 0.75) best = 4
+            else {
+                measure(3)
+                if (res[3] > 0 && res[3] < res[0] * 0.75) best = 3
+                else {
+                    measure(2)
+                    measure(1)
+                    if (res[2] > 0 && res[2] < res[0] * 0.75) best = 2
+                    else if (res[1] > 0 && res[1] < res[0] * 0.75) best = 1
+                }
             }
         } finally {
             svc?.dot(0)
         }
-        // pilih gaya paling tersamar (nomor terbesar) yang jauh lebih cepat dari tanpa titik
-        var best = 0
-        for (m in 1..4) if (res[m] > 0 && res[m] < res[0] * 0.75) best = m
         Prefs.dotStyle = best
         if (best == 0) {
             log("DIAGNOSA: tidak ada gaya titik yang jauh lebih cepat dari tanpa titik (" + res.joinToString(", ") + " ms). Klaim memakai tanpa titik.")
@@ -1951,13 +2027,35 @@ object Engine {
         log("DIAGNOSA GESER: awal terlihat " + rangeText(first) + ", server saat ini " + readCurrent(s0) + ", tinggi baris " + rh.toInt() + " px")
         val h = s0.h.toFloat()
         val w = s0.w.toFloat()
+        val slow = { x: Float -> doSwipe(w * x, h * 0.66f, w * (x + 0.02f), h * 0.66f - 3.0f * rh, 300, "pelan") }
+        fun hard(x: Float, holdMs: Long, ms: Long) {
+            if (holdMs > 0L) doSwipeHold(w * x, h * 0.66f, w * (x - 0.02f), h * 0.66f - 6.0f * rh, ms, holdMs, "keras")
+            else doSwipe(w * x, h * 0.66f, w * (x - 0.02f), h * 0.66f - 6.5f * rh, ms, "keras")
+        }
         val tests = listOf(
-            Var("A tarik panjang x77%, 170ms, dari 66% ke 8% tinggi layar (seperti foto)") { doSwipe(w * 0.77f, h * 0.66f, w * 0.78f, h * 0.08f, 170, "A") },
-            Var("B tarik panjang x60%, 170ms") { doSwipe(w * 0.60f, h * 0.66f, w * 0.61f, h * 0.08f, 170, "B") },
-            Var("C tarik panjang x77% + tahan 600ms") { doSwipeHold(w * 0.77f, h * 0.66f, w * 0.78f, h * 0.08f, 170, 600, "C") },
-            Var("D tarik panjang pelan 350ms x77%") { doSwipe(w * 0.77f, h * 0.66f, w * 0.78f, h * 0.08f, 350, "D") },
-            Var("E gesek pendek 3 baris x77%, 160ms") { doSwipe(w * 0.77f, h * 0.64f, w * 0.78f, h * 0.64f - 3.0f * rh, 160, "E") },
-            Var("F 40% tinggi layar x60%, 130ms (cara lama yang gagal)") { doSwipe(w * 0.60f, h * 0.66f, w * 0.60f, h * 0.26f, 130, "F") }
+            Var("A protokol: pelan 300ms, lalu keras 183ms (6 baris) + tahan 700ms, x77%") {
+                slow(0.77f)
+                sleepMs(700)
+                hard(0.77f, 700, 183)
+            },
+            Var("B protokol tanpa tahan: pelan lalu keras 170ms, x77%") {
+                slow(0.77f)
+                sleepMs(700)
+                hard(0.77f, 0, 170)
+            },
+            Var("C langsung keras + tahan dari posisi atas (tanpa pelan dulu)") {
+                hard(0.77f, 700, 183)
+            },
+            Var("D protokol di x60%: pelan lalu keras + tahan") {
+                slow(0.60f)
+                sleepMs(700)
+                hard(0.60f, 700, 183)
+            },
+            Var("E pelan lalu keras lebih kencang 120ms + tahan 1000ms, x77%") {
+                slow(0.77f)
+                sleepMs(700)
+                hard(0.77f, 1000, 120)
+            }
         )
         var winner = ""
         for (t in tests) {
