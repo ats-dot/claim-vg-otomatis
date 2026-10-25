@@ -876,28 +876,39 @@ object Engine {
     // (3) sesudah itu geseran pelan sudah cukup sampai baris terakhir.
     // Gesekan KERAS meniru auto clicker yang terbukti berhasil memuat baris baru di game ini:
     // satu garis lurus di x 77%, dari y 53% ke y 8% layar, 200 ms, tanpa tahan.
+    // Temuan dari HP lain (Realme 12 Plus): gesekan 66% ke 8% (200 ms) memuat baris baru; 53% ke 8% dan
+    // 66% ke 18% (lebih pendek) tidak. Di iQOO 11 perlu lebih kuat lagi. Jadi gesekan keras dibuat BERTINGKAT:
+    // dicoba dari yang paling ringan, lalu makin panjang dan makin cepat. Tingkat yang berhasil diingat.
     private val STYLES = listOf(
         Sty(300L, 3.0f, "gesek pelan 3 baris", 0.77f),
-        Sty(200L, 0f, "gesek keras (cara auto clicker: 53% ke 8%, 200ms)", 0.77f, 0L, true, 0.53f, 0.08f),
+        Sty(200L, 0f, "gesek keras tingkat 1 (66% ke 8%, 200ms)", 0.77f, 0L, true, 0.66f, 0.08f),
         Sty(280L, 3.0f, "gesek pelan 3 baris (ulang)", 0.76f),
-        Sty(200L, 0f, "gesek keras 66% ke 8%", 0.77f, 0L, true, 0.66f, 0.08f),
+        Sty(150L, 0f, "gesek keras tingkat 2 (70% ke 2%, 150ms)", 0.77f, 0L, true, 0.70f, 0.02f),
         Sty(260L, 3.0f, "gesek pelan tengah", 0.60f),
-        Sty(200L, 0f, "gesek keras 53% ke 18%", 0.77f, 0L, true, 0.53f, 0.18f)
+        Sty(100L, 0f, "gesek keras tingkat 3 (70% ke 2%, 100ms)", 0.77f, 0L, true, 0.70f, 0.02f),
+        Sty(70L, 0f, "gesek keras tingkat 4 (72% ke 1%, 70ms)", 0.77f, 0L, true, 0.72f, 0.01f)
     )
+    private val hardIdxs = listOf(1, 3, 5, 6)
+    private var hardLevel = 0
 
     // true setelah daftar mentok (bergerak kurang dari 1,2 baris): geseran berikutnya langsung keras
     private var hardNext = false
 
     // Geser daftar satu langkah dan BUKTIKAN daftarnya bergerak (posisi baris yang sama bergeser).
     // moved=false setelah semua gaya geser dicoba = benar-benar ujung daftar.
-    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 6): Step {
+    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 9): Step {
         val before = serverNums(s)
         val rh = rowH(s)
         var cur = s
         var lost = false
+        val hardSeq = ArrayList<Int>()
+        for (k in 0 until hardIdxs.size) {
+            hardSeq.add(hardIdxs[(hardLevel + k) % hardIdxs.size])
+            hardSeq.add(2)
+        }
         val seq: List<Int> = if (!forward) listOf(0, 2, 4)
-        else if (hardNext) listOf(1, 2, 3, 2, 5, 4)
-        else listOf(0, 1, 2, 3, 4, 5)
+        else if (hardNext) hardSeq
+        else listOf(0) + hardSeq
         for (attempt in 0 until minOf(maxTry, seq.size)) {
             val idx = seq[attempt]
             val st = STYLES[idx]
@@ -945,7 +956,8 @@ object Engine {
                         continue
                     }
                     hardNext = false
-                    log("Geseran " + scrollNo + " (" + tag + "): sinkron lagi, baris baru sudah dimuat; lanjut geseran pelan")
+                    hardLevel = hardIdxs.indexOf(idx).coerceAtLeast(0)
+                    log("Geseran " + scrollNo + " (" + tag + "): sinkron lagi, baris baru sudah dimuat (tingkat " + (hardLevel + 1) + "); lanjut geseran pelan")
                     continue
                 }
                 log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " terlalu jauh, baris mungkin terlewat. Geser balik")
@@ -975,6 +987,7 @@ object Engine {
             }
             if (shift >= rh * 0.4f || grew) {
                 styleIdx = idx
+                if (st.hard) hardLevel = hardIdxs.indexOf(idx).coerceAtLeast(0)
                 hardNext = (!st.hard) && shift < rh * 1.2f
                 log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + ", terlihat " + rangeText(after) + ", bergerak " + String.format("%.1f", shift / rh) + " baris" + (if (hardNext) " (mentok, berikutnya gesekan keras)" else ""))
                 return Step(cur, true, false)
@@ -2072,17 +2085,32 @@ object Engine {
         }
         // Semua uji memakai jalur yang sama dengan auto clicker (x 77%, 53% ke 8%). Bedanya hanya
         // KERAPATAN titik sentuh: satu garis (3 titik) lawan banyak potongan kecil beruntun.
+        val dotOn = if (Prefs.dotStyle > 0) Prefs.dotStyle else 5
+        // Temuan HP lain (Realme): 66% ke 8% (200 ms) memuat baris baru, yang lebih pendek tidak.
+        // iQOO 11 perlu lebih kuat. Sapuan kekuatan: makin panjang dan makin cepat.
         val tests = listOf(
-            Var("T1 (kontrol) satu garis x77%, 53% ke 8%, 200ms", null) { sw(0.77f, 0.53f, 0.08f, 200) },
-            Var("D1 potongan rapat: 8 x 25ms, 53% ke 8%", null) { seg(0.77f, 0.53f, 0.08f, 8, 25) },
-            Var("D2 potongan sangat rapat: 20 x 10ms", null) { seg(0.77f, 0.53f, 0.08f, 20, 10) },
-            Var("D3 potongan lebih jarang: 5 x 40ms", null) { seg(0.77f, 0.53f, 0.08f, 5, 40) },
-            Var("D4 potongan rapat dan lebih lambat: 12 x 40ms", null) { seg(0.77f, 0.53f, 0.08f, 12, 40) },
-            Var("D5 potongan rapat 8 x 25ms, sesudah gesekan pelan dulu", prep) { seg(0.77f, 0.53f, 0.08f, 8, 25) }
+            Var("S1 66% ke 8%, 200ms (berhasil di HP lain)", null) { sw(0.77f, 0.66f, 0.08f, 200) },
+            Var("S2 66% ke 8%, 120ms (lebih cepat)", null) { sw(0.77f, 0.66f, 0.08f, 120) },
+            Var("S3 70% ke 2%, 200ms (lebih panjang)", null) { sw(0.77f, 0.70f, 0.02f, 200) },
+            Var("S4 70% ke 2%, 150ms", null) { sw(0.77f, 0.70f, 0.02f, 150) },
+            Var("S5 70% ke 2%, 100ms", null) { sw(0.77f, 0.70f, 0.02f, 100) },
+            Var("S6 72% ke 1%, 70ms (paling kuat)", null) { sw(0.77f, 0.72f, 0.01f, 70) },
+            Var("S7 dua gesekan 66% ke 8%, 150ms, jeda 150ms", null) {
+                sw(0.77f, 0.66f, 0.08f, 150)
+                sleepMs(150)
+                sw(0.77f, 0.66f, 0.08f, 150)
+            },
+            Var("S8 dua gesekan 70% ke 2%, 100ms, jeda 150ms", null) {
+                sw(0.77f, 0.70f, 0.02f, 100)
+                sleepMs(150)
+                sw(0.77f, 0.70f, 0.02f, 100)
+            }
         )
         val hasil = ArrayList<String>()
         for (t in tests) {
             alive()
+            ClaimService.inst?.dot(dotOn)
+            sleepMs(300)
             val fresh = freshList()
             if (fresh == null) {
                 log("DIAGNOSA GESER: gagal membuka ulang Daftar Karakter, uji dihentikan")
