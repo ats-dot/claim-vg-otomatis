@@ -8,6 +8,7 @@ import android.graphics.Path
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -18,6 +19,16 @@ class ClaimService : AccessibilityService() {
         @Volatile
         var inst: ClaimService? = null
     }
+
+    // Alasan kegagalan terakhir (kosong = berhasil). Dibaca Engine untuk pesan log.
+    @Volatile
+    var lastShotError: String = ""
+
+    @Volatile
+    var lastGestureFail: String = ""
+
+    // Thread sendiri untuk callback screenshot, supaya tidak bergantung pada thread utama aplikasi
+    private val shotExec = Executors.newSingleThreadExecutor()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -38,38 +49,79 @@ class ClaimService : AccessibilityService() {
         super.onDestroy()
     }
 
+    private fun errName(code: Int): String = when (code) {
+        1 -> "kesalahan internal sistem"
+        2 -> "tidak ada akses aksesibilitas"
+        3 -> "terlalu cepat setelah screenshot sebelumnya"
+        4 -> "layar tidak valid"
+        5 -> "jendela tidak valid"
+        6 -> "jendela dilindungi (FLAG_SECURE)"
+        else -> "kode tidak dikenal"
+    }
+
     fun shot(): Bitmap? {
+        val t0 = System.currentTimeMillis()
         val latch = CountDownLatch(1)
         val out = AtomicReference<Bitmap?>(null)
+        val err = AtomicReference<String?>(null)
+        val abandoned = AtomicBoolean(false)
         try {
             takeScreenshot(
                 Display.DEFAULT_DISPLAY,
-                mainExecutor,
+                shotExec,
                 object : TakeScreenshotCallback {
                     override fun onSuccess(result: ScreenshotResult) {
+                        val hb = result.hardwareBuffer
                         try {
-                            val hb = result.hardwareBuffer
-                            val hw = Bitmap.wrapHardwareBuffer(hb, result.colorSpace)
-                            if (hw != null) {
-                                out.set(hw.copy(Bitmap.Config.ARGB_8888, false))
-                                hw.recycle()
+                            if (abandoned.get()) {
+                                AppLog.add("Screenshot datang TERLAMBAT (" + (System.currentTimeMillis() - t0) + " ms), dibuang")
+                            } else {
+                                val hw = Bitmap.wrapHardwareBuffer(hb, result.colorSpace)
+                                if (hw == null) {
+                                    err.set("hasil screenshot tidak bisa dibaca (wrapHardwareBuffer null)")
+                                } else {
+                                    out.set(hw.copy(Bitmap.Config.ARGB_8888, false))
+                                    hw.recycle()
+                                }
                             }
-                            hb.close()
-                        } catch (_: Throwable) {
+                        } catch (e: Throwable) {
+                            err.set("gagal mengolah hasil: " + e.javaClass.simpleName + " " + e.message)
+                        } finally {
+                            try {
+                                hb.close()
+                            } catch (_: Throwable) {
+                            }
+                            latch.countDown()
                         }
-                        latch.countDown()
                     }
 
                     override fun onFailure(errorCode: Int) {
+                        err.set("kode " + errorCode + " (" + errName(errorCode) + ")")
                         latch.countDown()
                     }
                 }
             )
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            lastShotError = "takeScreenshot melempar " + e.javaClass.simpleName + ": " + e.message
+            AppLog.add("Screenshot GAGAL: " + lastShotError)
             return null
         }
-        latch.await(5, TimeUnit.SECONDS)
-        return out.get()
+        val got = latch.await(3, TimeUnit.SECONDS)
+        val ms = System.currentTimeMillis() - t0
+        if (!got) {
+            abandoned.set(true)
+            lastShotError = "sistem tidak menjawab dalam 3000 ms"
+            AppLog.add("Screenshot GAGAL: " + lastShotError)
+            return null
+        }
+        val b = out.get()
+        if (b == null) {
+            lastShotError = (err.get() ?: "hasil kosong") + " (" + ms + " ms)"
+            AppLog.add("Screenshot GAGAL: " + lastShotError)
+            return null
+        }
+        lastShotError = ""
+        return b
     }
 
     fun tap(x: Float, y: Float): Boolean {
@@ -86,15 +138,15 @@ class ClaimService : AccessibilityService() {
     }
 
     fun back() {
-        performGlobalAction(GLOBAL_ACTION_BACK)
+        if (!performGlobalAction(GLOBAL_ACTION_BACK)) AppLog.add("Tombol Kembali (Back) gagal dikirim ke sistem")
     }
 
     fun home() {
-        performGlobalAction(GLOBAL_ACTION_HOME)
+        if (!performGlobalAction(GLOBAL_ACTION_HOME)) AppLog.add("Tombol Home gagal dikirim ke sistem")
     }
 
     fun recents() {
-        performGlobalAction(GLOBAL_ACTION_RECENTS)
+        if (!performGlobalAction(GLOBAL_ACTION_RECENTS)) AppLog.add("Tombol Recents gagal dikirim ke sistem")
     }
 
     private fun gesture(p: Path, ms: Long): Boolean {
@@ -103,22 +155,39 @@ class ClaimService : AccessibilityService() {
         val g = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(p, 0, ms))
             .build()
-        val sent = dispatchGesture(
-            g,
-            object : GestureResultCallback() {
-                override fun onCompleted(gestureDescription: GestureDescription?) {
-                    ok.set(true)
-                    latch.countDown()
-                }
+        val sent = try {
+            dispatchGesture(
+                g,
+                object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) {
+                        ok.set(true)
+                        latch.countDown()
+                    }
 
-                override fun onCancelled(gestureDescription: GestureDescription?) {
-                    latch.countDown()
-                }
-            },
-            null
-        )
-        if (!sent) return false
-        latch.await(4, TimeUnit.SECONDS)
-        return ok.get()
+                    override fun onCancelled(gestureDescription: GestureDescription?) {
+                        latch.countDown()
+                    }
+                },
+                null
+            )
+        } catch (e: Throwable) {
+            lastGestureFail = "dispatchGesture melempar " + e.javaClass.simpleName
+            return false
+        }
+        if (!sent) {
+            lastGestureFail = "ditolak sistem"
+            return false
+        }
+        val got = latch.await(4, TimeUnit.SECONDS)
+        if (!got) {
+            lastGestureFail = "timeout"
+            return false
+        }
+        if (!ok.get()) {
+            lastGestureFail = "dibatalkan sistem"
+            return false
+        }
+        lastGestureFail = ""
+        return true
     }
 }
