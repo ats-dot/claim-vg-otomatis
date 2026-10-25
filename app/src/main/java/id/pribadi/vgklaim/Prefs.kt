@@ -31,10 +31,24 @@ object Prefs {
         get() = s().getBoolean("close_game", true)
         set(v) { s().edit().putBoolean("close_game", v).apply() }
 
-    // Mode kecepatan hasil Diagnosa: 0 biasa, 1 titik melayang, 2 titik melayang + prioritas OCR
-    var perfMode: Int
-        get() = s().getInt("perf_mode", 0)
-        set(v) { s().edit().putInt("perf_mode", v).apply() }
+    // Gaya titik melayang hasil Diagnosa: 0 tanpa, 1 putih 14dp, 2 putih 2dp, 3 transparan 5%, 4 transparan penuh
+    var dotStyle: Int
+        get() = s().getInt("dot_style", 1)
+        set(v) { s().edit().putInt("dot_style", v).apply() }
+
+    // Mode tanpa jeda: tidak ada tidur setelah ketukan. Kalau mati, jeda = stepMs milidetik.
+    var noDelay: Boolean
+        get() = s().getBoolean("no_delay", true)
+        set(v) { s().edit().putBoolean("no_delay", v).apply() }
+
+    var stepMs: Int
+        get() = s().getInt("step_ms", 400)
+        set(v) { s().edit().putInt("step_ms", v.coerceIn(0, 3000)).apply() }
+
+    // Jenis Diagnosa: 0 umum/OCR, 1 geser daftar
+    var diagMode: Int
+        get() = s().getInt("diag_mode", 0)
+        set(v) { s().edit().putInt("diag_mode", v).apply() }
 
     var dotAuto: Boolean
         get() = s().getBoolean("dot_auto", true)
