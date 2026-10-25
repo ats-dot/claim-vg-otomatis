@@ -870,13 +870,15 @@ object Engine {
     // di sisi kanan daftar (x sekitar 78%), cepat (sekitar 0,2 detik), naik sekitar 20% tinggi layar.
     private class Sty(val ms: Long, val rows: Float, val name: String, val xf: Float, val hold: Long = 0L)
 
+    // "Tarik panjang" (sekitar 55% tinggi layar, dari bawah daftar sampai dekat judul, 0,17 detik, x sekitar 77%)
+    // adalah gerakan jari pada video contoh; gerakan ini yang memicu pemuatan baris server baru.
     private val STYLES = listOf(
-        Sty(130L, 3.5f, "gesek cepat 130ms", 0.60f),
-        Sty(100L, 4.0f, "gesek sangat cepat 100ms", 0.60f),
-        Sty(170L, 3.5f, "gesek cepat 170ms kanan", 0.78f),
+        Sty(160L, 3.0f, "gesek 3 baris kanan", 0.77f),
+        Sty(170L, 7.0f, "tarik panjang kanan", 0.77f),
+        Sty(130L, 3.5f, "gesek cepat tengah", 0.60f),
+        Sty(170L, 7.0f, "tarik panjang tengah", 0.60f),
         Sty(200L, 3.0f, "tarik cepat kanan", 0.78f),
         Sty(200L, 3.0f, "niru jari + tahan", 0.78f, 600L),
-        Sty(200L, 3.0f, "kiri cepat", 0.25f),
         Sty(700L, 2.0f, "tarik pelan tengah", 0.50f)
     )
 
@@ -890,10 +892,11 @@ object Engine {
         for (attempt in 0 until maxTry) {
             val idx = (styleIdx + attempt) % STYLES.size
             val st = STYLES[idx]
-            val dist = minOf(st.rows * rh, s.h * 0.40f)
             val x0 = s.w * st.xf
             val x1 = s.w * (st.xf + 0.02f)
             val y0 = if (forward) s.h * 0.64f else s.h * 0.38f
+            val maxD = if (forward) y0 - s.h * 0.06f else s.h * 0.90f - y0
+            val dist = minOf(st.rows * rh, maxD)
             val y1 = if (forward) y0 - dist else y0 + dist
             if (st.hold > 0L) doSwipeHold(x0, y0, x1, y1, st.ms, st.hold, "geser daftar (" + st.name + ")")
             else doSwipe(x0, y0, x1, y1, st.ms, "geser daftar (" + st.name + ")")
@@ -1878,27 +1881,10 @@ object Engine {
             val s = cap(R_SERVER)
             val n = serverNums(s)
             if (n.isNotEmpty() && n.keys.first() == topKey) return true
-            val rh = rowH(s)
-            doSwipe(s.w * 0.60f, s.h * 0.38f, s.w * 0.60f, s.h * 0.38f + 3.5f * rh, 130, "kembali ke atas")
-            sleepMs(900)
+            doSwipe(s.w * 0.77f, s.h * 0.40f, s.w * 0.78f, s.h * 0.90f, 170, "kembali ke atas")
+            sleepMs(1000)
         }
         return false
-    }
-
-    // Geser ke ujung bawah daftar (berhenti kalau daftar tidak bergerak lagi)
-    private fun reachEnd() {
-        for (i in 0 until 5) {
-            val s = cap(R_SERVER)
-            val before = serverNums(s)
-            val rh = rowH(s)
-            doSwipe(s.w * 0.60f, s.h * 0.64f, s.w * 0.60f, s.h * 0.64f - 3.5f * rh, 130, "ke ujung")
-            sleepMs(900)
-            val after = serverNums(cap(R_SERVER))
-            val grew = after.keys.any { !before.containsKey(it) }
-            val c = after.keys.firstOrNull { before.containsKey(it) }
-            val sh = if (c != null) Math.abs(before[c]!!.cy - after[c]!!.cy) else 999f
-            if (sh < rh * 0.4f && !grew) return
-        }
     }
 
     private fun frameLine(t0: Long, s: Scr, base: Set<String>): String {
@@ -1931,16 +1917,26 @@ object Engine {
             log(frameLine(t0, s, base))
             if (n.keys.any { !base.contains(it) }) grew = true
             val el = now() - t0
-            if (!th.isAlive && el >= 3500L) break
+            if (!th.isAlive && el >= 3000L) break
             if (el > 12_000L) break
         }
         return grew
     }
 
-    // Diagnosa geser v2: dari ujung daftar, coba gesekan cepat tanpa tahan (seperti jari)
-    // dan catat apa yang terjadi selama dan sesudah gesekan.
+    // Diagnosa geser v3: titik transparan aktif (supaya baca cepat), tiap uji dimulai dari posisi atas
     private fun diagScroll(s0: Scr) {
-        log("DIAGNOSA GESER v2: layar " + s0.w + "x" + s0.h + ", " + s0.lines.size + " baris teks")
+        val svc = ClaimService.inst
+        svc?.dot(if (Prefs.dotStyle > 0) Prefs.dotStyle else 4)
+        try {
+            sleepS(1.0)
+            diagScrollRun(s0)
+        } finally {
+            svc?.dot(0)
+        }
+    }
+
+    private fun diagScrollRun(s0: Scr) {
+        log("DIAGNOSA GESER v3: layar " + s0.w + "x" + s0.h + ", " + s0.lines.size + " baris teks")
         if (!isServerList(s0)) {
             log("DIAGNOSA GESER: ini bukan Daftar Karakter (teks: " + s0.all.take(100) + "). Buka Daftar Karakter lalu ulangi.")
             return
@@ -1956,24 +1952,19 @@ object Engine {
         val h = s0.h.toFloat()
         val w = s0.w.toFloat()
         val tests = listOf(
-            Var("A gesek sangat cepat 100ms, 4 baris, x60%") { doSwipe(w * 0.60f, h * 0.64f, w * 0.60f, h * 0.64f - 4.0f * rh, 100, "A") },
-            Var("B gesek cepat 130ms, 3,5 baris, x60%") { doSwipe(w * 0.60f, h * 0.64f, w * 0.60f, h * 0.64f - 3.5f * rh, 130, "B") },
-            Var("C gesek cepat 170ms, 3,5 baris, x78%") { doSwipe(w * 0.78f, h * 0.64f, w * 0.80f, h * 0.64f - 3.5f * rh, 170, "C") },
-            Var("D dua gesekan 130ms, jeda 400ms, x60%") {
-                doSwipe(w * 0.60f, h * 0.64f, w * 0.60f, h * 0.64f - 3.5f * rh, 130, "D1")
-                sleepMs(400)
-                doSwipe(w * 0.60f, h * 0.64f, w * 0.60f, h * 0.64f - 3.5f * rh, 130, "D2")
-            },
-            Var("E gesek 130ms, 40% tinggi layar, x60%") { doSwipe(w * 0.60f, h * 0.66f, w * 0.60f, h * 0.26f, 130, "E") },
-            Var("F ketuk panah kecil di bawah tombol Ganti Server") { tapXY(w * 0.50f, h * 0.87f, "panah bawah", true) }
+            Var("A tarik panjang x77%, 170ms, dari 66% ke 8% tinggi layar (seperti foto)") { doSwipe(w * 0.77f, h * 0.66f, w * 0.78f, h * 0.08f, 170, "A") },
+            Var("B tarik panjang x60%, 170ms") { doSwipe(w * 0.60f, h * 0.66f, w * 0.61f, h * 0.08f, 170, "B") },
+            Var("C tarik panjang x77% + tahan 600ms") { doSwipeHold(w * 0.77f, h * 0.66f, w * 0.78f, h * 0.08f, 170, 600, "C") },
+            Var("D tarik panjang pelan 350ms x77%") { doSwipe(w * 0.77f, h * 0.66f, w * 0.78f, h * 0.08f, 350, "D") },
+            Var("E gesek pendek 3 baris x77%, 160ms") { doSwipe(w * 0.77f, h * 0.64f, w * 0.78f, h * 0.64f - 3.0f * rh, 160, "E") },
+            Var("F 40% tinggi layar x60%, 130ms (cara lama yang gagal)") { doSwipe(w * 0.60f, h * 0.66f, w * 0.60f, h * 0.26f, 130, "F") }
         )
         var winner = ""
         for (t in tests) {
             alive()
             val topOk = resetTop(topKey)
-            reachEnd()
             val base = serverNums(cap(R_SERVER)).keys.toSet()
-            log("DIAGNOSA GESER uji " + t.name + " (mulai dari ujung: " + rangeText(serverNums(cap(R_SERVER))) + (if (topOk) "" else ", PERINGATAN: reset ke atas belum pasti") + ")")
+            log("DIAGNOSA GESER uji " + t.name + " (mulai: " + rangeText(serverNums(cap(R_SERVER))) + (if (topOk) "" else ", PERINGATAN: reset ke atas belum pasti") + ")")
             val grew = sampleDuring(base, t.run)
             if (grew) {
                 winner = t.name
