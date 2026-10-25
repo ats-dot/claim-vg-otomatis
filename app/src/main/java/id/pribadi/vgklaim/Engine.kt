@@ -2,6 +2,8 @@ package id.pribadi.vgklaim
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.PowerManager
 
 object Engine {
@@ -32,6 +34,30 @@ object Engine {
     private var capN = 0
     private var capShotMs = 0L
     private var capOcrMs = 0L
+    private var areaN = 0
+    private var areaShotMs = 0L
+    private var areaOcrMs = 0L
+    private var lastW = 0
+    private var lastH = 0
+    private var blindX = -1f
+    private var blindY = -1f
+    private var blindWhy = ""
+    private var topupTaps = 0
+    private var topupBlockUntil = 0L
+
+    // TAHAP 1: area baca (pecahan layar: kiri, atas, kanan, bawah). Langkah yang sudah dikenal
+    // hanya membaca area kecil, bukan seluruh layar. Angka dari screenshot layar 2400x1080.
+    private class Reg(val x0: Float, val y0: Float, val x1: Float, val y1: Float)
+
+    private val R_MENU = Reg(0.04f, 0.08f, 0.27f, 0.99f)   // daftar menu kiri halaman Hadiah
+    private val R_EVT = Reg(0.04f, 0.08f, 0.62f, 1.0f)     // menu kiri + judul besar (cek halaman Hadiah terbuka)
+    private val R_PANEL = Reg(0.38f, 0.05f, 1.0f, 1.0f)    // panel kanan Hadiah (Klaim, Pergi, koin)
+    private val R_OK = Reg(0.20f, 0.60f, 0.80f, 1.0f)      // tombol OK / ketuk untuk lanjut
+    private val R_PROFIL = Reg(0.0f, 0.10f, 0.46f, 1.0f)   // ID akun + tab kiri layar Profil
+    private val R_AKUN = Reg(0.62f, 0.10f, 1.0f, 0.95f)    // tombol kanan Pengaturan Akun
+    private val R_SERVER = Reg(0.12f, 0.12f, 0.88f, 0.88f) // daftar karakter, tombol emas, popup sistem
+    private val R_BOTTOM = Reg(0.0f, 0.80f, 1.0f, 1.0f)    // strip bawah: Memuat Game + menu lobby
+    private val R_TOP = Reg(0.0f, 0.0f, 1.0f, 0.14f)       // strip atas: judul halaman (Pusat Bantuan)
     private var acct: String = "-"
     private var firstPending = false
     private var lastClaimed: String? = null
@@ -64,6 +90,9 @@ object Engine {
         Matcher.reload(ctx.applicationContext)
         running = true
         status = "Berjalan"
+        val fe = KeepAliveService.start(ctx.applicationContext)
+        if (fe != null) log("Layanan latar gagal dimulai (" + fe + "). Klaim tetap jalan tanpa layanan latar.")
+        else log("Layanan latar dimulai (notifikasi VG Klaim berjalan)")
         total = 0
         doneCount = 0
         lastActive = now()
@@ -78,6 +107,7 @@ object Engine {
         running = false
         status = "Berhenti"
         thread?.interrupt()
+        app?.let { KeepAliveService.stop(it) }
     }
 
     private fun runMain() {
@@ -103,6 +133,7 @@ object Engine {
             log("Error: " + e.toString())
         } finally {
             running = false
+            app?.let { KeepAliveService.stop(it) }
             try {
                 wl?.release()
             } catch (_: Throwable) {
@@ -124,7 +155,12 @@ object Engine {
         while (left > 0) {
             if (!running) throw Stop("Dihentikan")
             val s = if (left > 200) 200L else left
+            val t0 = now()
             Thread.sleep(s)
+            val dt = now() - t0
+            if (dt > s + 2500L) {
+                log("Peringatan: proses tertahan " + dt + " ms saat menunggu " + s + " ms (mungkin dibekukan/dibatasi sistem, cek pengaturan baterai)")
+            }
             left -= s
         }
     }
@@ -133,8 +169,30 @@ object Engine {
 
     private fun speed(): Double = Prefs.speed.toDouble().coerceIn(1.0, 3.0)
 
-    private fun cap(): Scr {
+    private fun rect(b: Bitmap, r: Reg): Rect {
+        val x0 = (b.width * r.x0).toInt().coerceIn(0, b.width - 40)
+        val y0 = (b.height * r.y0).toInt().coerceIn(0, b.height - 40)
+        val x1 = (b.width * r.x1).toInt().coerceIn(x0 + 32, b.width)
+        val y1 = (b.height * r.y1).toInt().coerceIn(y0 + 32, b.height)
+        return Rect(x0, y0, x1, y1)
+    }
+
+    private fun setBlind(x: Float, y: Float, why: String) {
+        blindX = x
+        blindY = y
+        blindWhy = why
+    }
+
+    private fun clearBlind() {
+        blindX = -1f
+    }
+
+    // Screenshot + OCR. reg = null: baca layar penuh. reg diisi: baca hanya area itu (lebih cepat).
+    private fun cap(reg: Reg? = null): Scr {
         var tries = 0
+        var recovered = false
+        var blindDone = false
+        var lastLoop = now()
         while (true) {
             alive()
             val svc = ClaimService.inst ?: throw Stop("Aksesibilitas mati")
@@ -142,25 +200,70 @@ object Engine {
             if (gap > 0) sleepMs(gap)
             lastShot = now()
             val t1 = now()
+            if (tries > 0 && t1 - lastLoop > 8000L) {
+                log("Peringatan: jeda antar percobaan screenshot " + (t1 - lastLoop) + " ms (normalnya sekitar 4000). Proses mungkin ditahan sistem")
+            }
+            lastLoop = t1
             val bmp = svc.shot()
             val t2 = now()
             if (bmp != null) {
-                var lines = Ocr.read(bmp)
+                lastW = bmp.width
+                lastH = bmp.height
+                val rc = if (reg != null) rect(bmp, reg) else null
+                var lines = Ocr.read(bmp, rc)
                 if (lines == null) {
                     log("OCR gagal, mencoba lagi")
-                    lines = Ocr.read(bmp)
+                    lines = Ocr.read(bmp, rc)
+                    if (lines == null) log("OCR gagal dua kali, layar dianggap kosong")
                 }
                 val t3 = now()
-                capN++
-                capShotMs += t2 - t1
-                capOcrMs += t3 - t2
+                if (reg == null) {
+                    capN++
+                    capShotMs += t2 - t1
+                    capOcrMs += t3 - t2
+                } else {
+                    areaN++
+                    areaShotMs += t2 - t1
+                    areaOcrMs += t3 - t2
+                }
+                if (tries > 0) log("Screenshot pulih setelah " + tries + " kegagalan berturut-turut")
                 if (t3 - t1 > 3000L) {
                     log("Baca layar lambat: " + (t3 - t1) + " ms (screenshot " + (t2 - t1) + ", OCR " + (t3 - t2) + ")")
                 }
                 return Scr(bmp, lines ?: emptyList())
             }
             tries++
-            if (tries >= 15) throw Stop("Screenshot terus gagal (layar mati / izin belum diberikan?)")
+            if (tries == 3) {
+                log("Screenshot gagal 3 kali berturut-turut (alasan terakhir: " + svc.lastShotError + ")")
+                if (blindX >= 0f && !blindDone && lastW > 0) {
+                    blindDone = true
+                    tapXY(lastW * blindX, lastH * blindY, blindWhy)
+                }
+            }
+            if (tries == 6 && !recovered) {
+                recovered = true
+                log("Percobaan pemulihan: membawa VG Klaim ke depan sebentar, lalu membuka game lagi")
+                try {
+                    val c = app
+                    if (c != null) {
+                        val i = Intent(c, MainActivity::class.java)
+                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        svc.startActivity(i)
+                    }
+                    sleepS(2.0)
+                    launch()
+                    sleepS(3.0)
+                } catch (e: Stop) {
+                    throw e
+                } catch (e: InterruptedException) {
+                    throw e
+                } catch (e: Throwable) {
+                    log("Pemulihan gagal: " + e.javaClass.simpleName)
+                }
+            }
+            if (tries >= 12) {
+                throw Stop("Screenshot terus gagal 12 kali berturut-turut. Alasan terakhir: " + svc.lastShotError + ". Lihat baris 'Screenshot GAGAL' di atas.")
+            }
             sleepS(1.0)
         }
     }
@@ -169,20 +272,38 @@ object Engine {
         capN = 0
         capShotMs = 0L
         capOcrMs = 0L
+        areaN = 0
+        areaShotMs = 0L
+        areaOcrMs = 0L
     }
 
     private fun statLine(): String {
-        val n = if (capN == 0) 1 else capN
+        val nf = if (capN == 0) 1 else capN
+        val na = if (areaN == 0) 1 else areaN
         val rt = Runtime.getRuntime()
         val used = (rt.totalMemory() - rt.freeMemory()) / 1048576L
-        return "baca layar rata-rata " + ((capShotMs + capOcrMs) / n) + " ms (screenshot " + (capShotMs / n) +
-            ", OCR " + (capOcrMs / n) + ") x " + capN + " kali, memori " + used + "/" + (rt.maxMemory() / 1048576L) + " MB"
+        return "layar penuh rata-rata " + ((capShotMs + capOcrMs) / nf) + " ms (screenshot " + (capShotMs / nf) +
+            ", OCR " + (capOcrMs / nf) + ") x " + capN +
+            "; area kecil rata-rata " + ((areaShotMs + areaOcrMs) / na) + " ms (screenshot " + (areaShotMs / na) +
+            ", OCR " + (areaOcrMs / na) + ") x " + areaN +
+            "; memori " + used + "/" + (rt.maxMemory() / 1048576L) + " MB"
     }
 
     private fun tapXY(x: Float, y: Float, why: String) {
         alive()
         log("Ketuk: " + why)
-        ClaimService.inst?.tap(x, y)
+        val svc = ClaimService.inst
+        if (svc == null) {
+            log("KETUKAN GAGAL (" + why + "): aksesibilitas mati")
+            return
+        }
+        var ok = svc.tap(x, y)
+        if (!ok && svc.lastGestureFail != "timeout") {
+            log("Ketukan gagal (" + why + "): " + svc.lastGestureFail + ". Mengulang sekali")
+            sleepS(0.3)
+            ok = svc.tap(x, y)
+        }
+        if (!ok) log("KETUKAN GAGAL (" + why + "): " + svc.lastGestureFail)
         lastActive = now()
         sleepS(0.6 / speed())
     }
@@ -195,8 +316,23 @@ object Engine {
         sleepS(0.8)
     }
 
+    private fun doSwipe(x1: Float, y1: Float, x2: Float, y2: Float, ms: Long, why: String) {
+        val svc = ClaimService.inst
+        if (svc == null) {
+            log("GESERAN GAGAL (" + why + "): aksesibilitas mati")
+            return
+        }
+        var ok = svc.swipe(x1, y1, x2, y2, ms)
+        if (!ok && svc.lastGestureFail != "timeout") {
+            log("Geseran gagal (" + why + "): " + svc.lastGestureFail + ". Mengulang sekali")
+            sleepS(0.3)
+            ok = svc.swipe(x1, y1, x2, y2, ms)
+        }
+        if (!ok) log("GESERAN GAGAL (" + why + "): " + svc.lastGestureFail)
+    }
+
     private fun swipe(x1: Float, y1: Float, x2: Float, y2: Float) {
-        ClaimService.inst?.swipe(x1, y1, x2, y2, 380)
+        doSwipe(x1, y1, x2, y2, 380, "geser menu")
         sleepS(0.7)
     }
 
@@ -320,6 +456,20 @@ object Engine {
             if (flip++ % 2 == 0) tapArrow(s) else back()
             return true
         }
+        val tu = s.find("hadiahtopup")
+        if (tu != null && tu.cy < s.h * 0.18f) {
+            if (now() < topupBlockUntil) return false
+            if (topupTaps >= 3) {
+                topupBlockUntil = now() + 60_000L
+                topupTaps = 0
+                log("Popup Hadiah Top Up Pertama tidak menutup setelah 3 ketukan X. Diabaikan 60 detik (cek posisi X: 85,6% / 7,4%)")
+                return false
+            }
+            topupTaps++
+            tapXY(s.w * 0.856f, s.h * 0.074f, "tutup X (Hadiah Top Up Pertama; tidak mengetuk Top Up Sekarang)")
+            return true
+        }
+        topupTaps = 0
         if (tapX(s)) return true
         for (k in listOf("ketukuntukmelanjutkan", "ketukuntuk")) {
             val l = s.find(k)
@@ -353,7 +503,8 @@ object Engine {
         var loadLogged = false
         val quietMs = 15_000L
         while (now() - t0 < maxSec * 1000L) {
-            val s = cap()
+            // Baca hanya strip bawah layar: cukup untuk mengenali "Memuat Game" dan menu lobby
+            var s = cap(R_BOTTOM)
             lastActive = now()
             val elapsed = now() - t0
             if (elapsed > (relaunched + 1) * 100_000L && relaunched < 2) {
@@ -363,7 +514,17 @@ object Engine {
                 sleepS(5.0)
                 continue
             }
-            if (isLobby(s) && !eventOpen(s) && !isServerList(s)) {
+            // Layar loading ("Memuat Game..." + tulisan persyaratan di bawahnya): jangan diketuk
+            if (s.has("memuatgame", "sayatelahmembaca")) {
+                okCount = 0
+                if (!loadLogged) {
+                    log("Game sedang memuat (tidak mengetuk apa pun)")
+                    loadLogged = true
+                }
+                sleepS(2.0)
+                continue
+            }
+            if (isLobby(s)) {
                 okCount++
                 if (okCount >= 2) {
                     log("Lobby terdeteksi")
@@ -373,15 +534,6 @@ object Engine {
                 continue
             }
             okCount = 0
-            // Layar loading ("Memuat Game..." + tulisan persyaratan di bawahnya): jangan diketuk
-            if (s.has("memuatgame", "sayatelahmembaca")) {
-                if (!loadLogged) {
-                    log("Game sedang memuat (tidak mengetuk apa pun)")
-                    loadLogged = true
-                }
-                sleepS(2.0)
-                continue
-            }
             if (elapsed < quietMs) {
                 // 15 detik pertama: game masih memuat, jangan mengetuk apa pun
                 if (!quietLogged) {
@@ -389,7 +541,20 @@ object Engine {
                     quietLogged = true
                 }
                 sleepS(1.5)
-            } else if (!popups(s)) {
+                continue
+            }
+            // Strip bawah tidak cukup mengenali layar: baca layar penuh
+            s = cap()
+            if (isLobby(s) && !eventOpen(s) && !isServerList(s)) {
+                okCount++
+                if (okCount >= 2) {
+                    log("Lobby terdeteksi")
+                    return s
+                }
+                sleepS(0.5)
+                continue
+            }
+            if (!popups(s)) {
                 log("Menunggu layar dikenali...")
                 sleepS(1.5)
             }
@@ -490,7 +655,7 @@ object Engine {
 
     // Geser pelan supaya daftar tidak "meluncur" dan melewatkan baris
     private fun slowSwipe(x1: Float, y1: Float, x2: Float, y2: Float) {
-        ClaimService.inst?.swipe(x1, y1, x2, y2, 700)
+        doSwipe(x1, y1, x2, y2, 700, "geser daftar server")
         sleepS(0.8)
     }
 
@@ -509,12 +674,12 @@ object Engine {
         for (attempt in 0 until 3) {
             val before = serverNums(cur).keys.toSet()
             scrollList(cur, forward, frac)
-            val n = cap()
+            val n = cap(R_SERVER)
             val after = serverNums(n).keys
             if (before.isEmpty() || after.isEmpty() || before.any { it in after }) return n
             log("Tarikan terlalu jauh (baris terlewat), kembali dan tarik lebih pendek")
             scrollList(n, !forward, frac)
-            cur = cap()
+            cur = cap(R_SERVER)
             frac *= 0.6f
         }
         return cur
@@ -548,6 +713,46 @@ object Engine {
         tapXY(px, py, "ikon profil (posisi tetap " + px.toInt() + "," + py.toInt() + ")")
     }
 
+    // Layar Pengaturan Akun (dibaca area kanan): ketuk Ganti Server, tunggu daftar karakter
+    private fun accountToList(a: Scr): Scr? {
+        readAccountId(a)
+        val gs = a.exact("gantiserver") ?: a.find("gantiserver")
+        if (gs == null) {
+            log("Di layar Pengaturan Akun, tombol Ganti Server tidak terbaca (teks area kanan: " + a.all.take(120) + ")")
+            sleepS(1.0)
+            return null
+        }
+        tapLine(gs, "Ganti Server")
+        sleepS(1.3)
+        val l = cap(R_SERVER)
+        if (isServerList(l)) return l
+        log("Setelah Ganti Server, daftar karakter belum terbaca. Membaca layar penuh")
+        return null
+    }
+
+    // Layar Profil (dibaca area kiri): baca ID, ketuk Akun, tunggu Pengaturan Akun
+    private fun profileToList(p: Scr): Scr? {
+        readProfileInfo(p)
+        val ak = p.exact("akun")
+        if (ak == null) {
+            log("Menu Akun tidak terbaca di layar Profil, kembali")
+            back()
+            return null
+        }
+        tapLine(ak, "Akun")
+        sleepS(1.0)
+        // Kalau screenshot gagal berulang di sini, cadangan: ketuk posisi tetap Ganti Server
+        setBlind(0.807f, 0.676f, "Ganti Server (posisi tetap, layar Pengaturan Akun tidak bisa dibaca)")
+        val a = try {
+            cap(R_AKUN)
+        } finally {
+            clearBlind()
+        }
+        if (isAccount(a)) return accountToList(a)
+        log("Setelah ketuk Akun, Pengaturan Akun belum terbaca (teks: " + a.all.take(100) + ")")
+        return null
+    }
+
     private fun openServerList(): Scr {
         var avatarFails = 0
         var unknown = 0
@@ -555,27 +760,13 @@ object Engine {
             var s = cap()
             if (isServerList(s)) return s
             if (isAccount(s)) {
-                readAccountId(s)
-                val gs = s.exact("gantiserver") ?: s.find("gantiserver")
-                if (gs != null) {
-                    tapLine(gs, "Ganti Server")
-                    sleepS(1.5)
-                } else {
-                    log("Di layar Pengaturan Akun, tombol Ganti Server tidak terbaca")
-                    sleepS(1.0)
-                }
+                val r = accountToList(s)
+                if (r != null) return r
                 continue
             }
             if (isProfile(s)) {
-                readProfileInfo(s)
-                val ak = s.exact("akun")
-                if (ak != null) {
-                    tapLine(ak, "Akun")
-                    sleepS(1.2)
-                } else {
-                    log("Menu Akun tidak terbaca di layar Profil, kembali")
-                    back()
-                }
+                val r = profileToList(s)
+                if (r != null) return r
                 continue
             }
             if (!isLobby(s) || eventOpen(s)) {
@@ -594,6 +785,12 @@ object Engine {
             // Di lobby: ketuk ikon profil (posisi tetap dulu, template avatar hanya cadangan)
             tapAvatar(s, avatarFails >= 1 && Matcher.has("avatar"))
             sleepS(1.5)
+            val pr = cap(R_PROFIL)
+            if (isProfile(pr)) {
+                val r = profileToList(pr)
+                if (r != null) return r
+                continue
+            }
             s = cap()
             if (isServerList(s)) return s
             if (isAccount(s) || isProfile(s)) continue
@@ -660,7 +857,7 @@ object Engine {
     private fun switchTo(name: String) {
         log("Ganti server -> " + name)
         status = "Ganti server " + name
-        var s = cap()
+        var s = cap(R_SERVER)
         if (!isServerList(s)) s = openServerList()
         var found: Line? = null
         for (pass in 0 until 2) {
@@ -694,7 +891,7 @@ object Engine {
     private fun confirmSwitch() {
         var gsTaps = 0
         for (i in 0 until 14) {
-            val s = cap()
+            val s = cap(R_SERVER)
             if (s.has("memuatgame")) {
                 log("Game memuat ulang")
                 return
@@ -705,7 +902,7 @@ object Engine {
                 if (b != null) {
                     tapLine(b, "OK (server telah diganti)")
                     sleepS(1.0)
-                    val s2 = cap()
+                    val s2 = cap(R_SERVER)
                     if (s2.has("pemberitahuansistem", "servertelahdiganti")) {
                         val b2 = s2.exact("ok")
                         if (b2 != null) tapLine(b2, "OK diulang (popup masih terlihat)")
@@ -746,7 +943,7 @@ object Engine {
                 for (yy in listOf(PETIR_Y, 0.347f, 0.671f, 0.185f)) {
                     tapXY(s.w * PETIR_X, s.h * yy, "ikon tab kiri y=" + (yy * 100).toInt() + "% (cari tab Hadiah)")
                     sleepS(1.5)
-                    if (eventOpen(cap())) return
+                    if (eventOpen(cap(R_EVT))) return
                 }
                 continue
             }
@@ -770,13 +967,13 @@ object Engine {
 
     private fun openMenu(keys: List<String>): Scr? {
         for (i in 0 until 7) {
-            val s = cap()
+            val s = cap(R_MENU)
             for (k in keys) {
                 val l = s.find(k)
                 if (l != null) {
                     tapLine(l, "menu " + k)
                     sleepS(1.2)
-                    return cap()
+                    return cap(R_PANEL)
                 }
             }
             val x = s.w * 0.15f
@@ -787,7 +984,7 @@ object Engine {
 
     private fun waitOk(): Boolean {
         for (i in 0 until 6) {
-            val s = cap()
+            val s = cap(R_OK)
             val b = s.exact("ok") ?: s.exact("konfirmasi") ?: s.exact("berikutnya")
             if (b != null) {
                 tapLine(b, "OK")
@@ -811,7 +1008,7 @@ object Engine {
         var noPopup = 0
         for (round in 0 until maxRounds) {
             if (now() - serverT0 > 15 * 60_000L) throw Stop("Server ini terlalu lama (>15 menit)")
-            val s = if (round == 0 && first != null) first else cap()
+            val s = if (round == 0 && first != null) first else cap(R_PANEL)
             val l = s.exact("klaimsemua") ?: s.find("klaimsemua") ?: s.exactAll("klaim").firstOrNull()
             if (s.has("sudahdiklaim")) {
                 log(label + ": sudah diklaim")
@@ -840,13 +1037,13 @@ object Engine {
     // Cari menu: baca layar, geser turun SEKALI, baca lagi. Tidak geser naik.
     private fun openMenuQuick(keys: List<String>): Scr? {
         for (i in 0 until 2) {
-            val s = cap()
+            val s = cap(R_MENU)
             for (k in keys) {
                 val l = s.find(k)
                 if (l != null) {
                     tapLine(l, "menu " + k)
                     sleepS(1.2)
-                    return cap()
+                    return cap(R_PANEL)
                 }
             }
             if (i == 0) {
@@ -891,6 +1088,10 @@ object Engine {
             mx - mn < 35 && mx > 80 && mx < 210
         }
 
+    // Halaman kanan "Masukan Advance Server" masih terbuka (dibaca dari area panel kanan)
+    private fun panelUp(s: Scr): Boolean =
+        s.has("berikanmasukan", "menemukanbug", "pengalamanburuk", "mengklaim") || s.exact("pergi") != null
+
     private fun claimCoin(first: Scr) {
         var s = first
         var gold = 0
@@ -906,7 +1107,7 @@ object Engine {
             if (panel && (gold >= GOLD_MIN || gray >= GRAY_MIN)) break
             if (k < 2) {
                 sleepS(0.4)
-                s = cap()
+                s = cap(R_PANEL)
             }
         }
         log("Koin x20: emas=" + gold + ", abu=" + gray + ", titik merah=" + red + (if (panel) "" else " (halaman kanan belum terbaca)"))
@@ -928,7 +1129,7 @@ object Engine {
                 var seen = false
                 val t0 = now()
                 while (now() - t0 < 5000L) {
-                    val sp = cap()
+                    val sp = cap(R_TOP)
                     if (sp.has("pusatbantuan")) {
                         seen = true
                         break
@@ -937,7 +1138,7 @@ object Engine {
                 log(if (seen) "Pusat Bantuan terbaca, kembali" else "Pusat Bantuan tidak terbaca, tetap kembali")
                 back()
                 sleepS(0.8)
-                val s2 = cap()
+                val s2 = cap(R_EVT)
                 if (!eventOpen(s2)) {
                     log("Kembali dari Pergi, membuka Event lagi")
                     openEvent()
@@ -950,15 +1151,15 @@ object Engine {
         // Tunggu titik merah muncul (siap diklaim), lalu ketuk koin
         var ready = false
         for (k in 0 until 3) {
-            s = cap()
-            if (!eventOpen(s)) break
+            s = cap(R_PANEL)
+            if (!panelUp(s)) break
             if (coinRed(s) >= RED_MIN) {
                 ready = true
                 break
             }
             sleepS(0.4)
         }
-        if (eventOpen(s)) {
+        if (panelUp(s)) {
             tapXY(s.w * COIN_X, s.h * COIN_Y, if (ready) "koin x20" else "koin x20 (titik merah belum terlihat)")
             sleepS(1.0)
             waitOk()
@@ -1102,6 +1303,45 @@ object Engine {
         if (Prefs.closeGame) closeApp() else backToLobby()
     }
 
+    private fun timeOcr(bmp: Bitmap, r: Rect?): String {
+        val ts = ArrayList<Long>()
+        for (i in 0 until 3) {
+            val t0 = now()
+            val l = Ocr.read(bmp, r)
+            ts.add(now() - t0)
+            if (l == null) return "OCR gagal"
+        }
+        return ts.joinToString(", ") + " ms (rata-rata " + (ts.sum() / ts.size) + " ms)"
+    }
+
+    // Pengukuran Tahap 1: OCR layar penuh vs area kecil, uji screenshot, status baterai
+    private fun diagExtra(ctx: Context, s: Scr) {
+        try {
+            val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
+            log("DIAGNOSA: pengecualian baterai: " + (if (pm.isIgnoringBatteryOptimizations(ctx.packageName)) "SUDAH" else "BELUM"))
+        } catch (_: Throwable) {
+        }
+        log("DIAGNOSA: uji screenshot 5x")
+        for (i in 1..5) {
+            val t0 = now()
+            val b = ClaimService.inst?.shot()
+            log("  #" + i + ": " + (if (b != null) "ok" else "GAGAL") + " " + (now() - t0) + " ms")
+            sleepMs(450)
+        }
+        log("DIAGNOSA: uji kecepatan OCR (3x tiap area, skala " + Prefs.ocrScale + "%)")
+        log("  layar penuh (100%): " + timeOcr(s.bmp, null))
+        val regs = listOf(
+            Pair("menu kiri", R_MENU), Pair("panel kanan", R_PANEL), Pair("tengah-bawah (OK)", R_OK),
+            Pair("profil", R_PROFIL), Pair("akun", R_AKUN), Pair("daftar server", R_SERVER),
+            Pair("strip bawah", R_BOTTOM), Pair("strip atas", R_TOP)
+        )
+        for (pr in regs) {
+            val r = pr.second
+            val pct = ((r.x1 - r.x0) * (r.y1 - r.y0) * 100).toInt()
+            log("  area " + pr.first + " (" + pct + "% layar): " + timeOcr(s.bmp, rect(s.bmp, r)))
+        }
+    }
+
     fun diagnose(ctx: Context) {
         Prefs.init(ctx)
         if (running) {
@@ -1135,6 +1375,7 @@ object Engine {
                 val pp = parseProfile(s)
                 log("DIAGNOSA: profil ID=" + (pp?.first ?: "-") + " server=" + (pp?.second ?: "-"))
                 log("DIAGNOSA: koin x20 emas=" + coinGold(s) + " titikMerah=" + coinRed(s) + " (hanya berarti di halaman Masukan Advance Server)")
+                diagExtra(ctx, s)
                 for (n in Matcher.names(ctx)) {
                     val h = Matcher.find(s, n)
                     log("  template " + n + ": " + (if (h == null) "tidak cocok" else "cocok " + (h.score * 100).toInt() + "% di titik " + h.x.toInt() + "," + h.y.toInt()))
