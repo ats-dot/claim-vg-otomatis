@@ -31,6 +31,15 @@ object Prefs {
         get() = s().getBoolean("close_game", true)
         set(v) { s().edit().putBoolean("close_game", v).apply() }
 
+    // Mode kecepatan hasil Diagnosa: 0 biasa, 1 titik melayang, 2 titik melayang + prioritas OCR
+    var perfMode: Int
+        get() = s().getInt("perf_mode", 0)
+        set(v) { s().edit().putInt("perf_mode", v).apply() }
+
+    var dotAuto: Boolean
+        get() = s().getBoolean("dot_auto", true)
+        set(v) { s().edit().putBoolean("dot_auto", v).apply() }
+
     // Aksi setelah selesai: 1 = kembali ke VG Klaim, 2 = ke Home, 3 = tetap di game
     var afterDone: Int
         get() = s().getInt("after_done", 1)
