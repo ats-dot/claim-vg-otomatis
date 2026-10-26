@@ -791,11 +791,11 @@ object Engine {
     // Tutup popup susulan yang langsung muncul setelah popup sebelumnya. Selesai kalau satu pemeriksaan bersih.
     private fun closeRemainingPopups() {
         var guard = 0
-        while (guard < 8) {
+        while (guard < 4) {
             guard++
-            sleepMs(250)
             val s = cap()
             if (!(popups(s) || darkPopupX(s))) return
+            sleepMs(300)
         }
     }
 
@@ -996,12 +996,14 @@ object Engine {
 
     // ===== Geser maju untuk mencari server =====
     // Daftar baru hanya berisi 5 baris. Geseran pertama = tarikan manual (Pengaturan) yang memuat server baru.
-    // Sesudahnya hanya geser pelan. Tiap layar: maksimal 2 server baru dan minimal 1 server lama (patokan).
-    // Server baru = server yang tidak ada di layar sebelum geseran. Selesai kalau semua server sudah terlihat,
-    // atau 3 geseran berturut-turut tanpa server baru (daftar tidak pernah mentok, hanya bergoyang di ujung).
+    // Sesudahnya geser pelan; kalau geser pelan tidak memunculkan server baru, tarikan dipakai lagi.
+    // Tiap layar: maksimal 2 server baru dan minimal 1 server lama (patokan). Server baru = server yang tidak
+    // ada di layar sebelum geseran. Selesai kalau semua server sudah terlihat, atau 2 tarikan berturut-turut
+    // tanpa server baru (daftar tidak pernah mentok, hanya bergoyang di ujung).
     private val listSeen = LinkedHashSet<String>()
     private var listPulled = false
-    private var listNoNew = 0
+    private var listReopened = false
+    private var pullFails = 0
     private var slowRows = 3.0f
     private var expectOverride = -1
 
@@ -1009,12 +1011,32 @@ object Engine {
         if (expectOverride >= 0) expectOverride else (Prefs.serverCount - 1).coerceAtLeast(0)
 
     // Panggil tiap kali Daftar Karakter baru dibuka (posisi paling atas)
-    private fun beginList(s: Scr) {
+    private fun beginList(s: Scr, resetReopen: Boolean = true) {
         listSeen.clear()
         listPulled = false
-        listNoNew = 0
+        pullFails = 0
         slowRows = 3.0f
+        if (resetReopen) listReopened = false
         for (k in serverNums(s).keys) if (k != cur) listSeen.add(k)
+    }
+
+    private fun pullIdx(a: Int): Int = if (Prefs.swipeAuto) hardIdxs[(hardLevel + a) % hardIdxs.size] else 1
+
+    // Satu tarikan keras. Mengembalikan layar sesudahnya (null kalau daftar tidak terbaca).
+    private fun pullOnce(s: Scr, a: Int, tag: String): Scr? {
+        val styles = if (Prefs.swipeAuto) STYLES else manualStyles()
+        val st = styles[pullIdx(a)]
+        doSwipe(s.w * st.xf, s.h * st.y0f, s.w * st.xf, s.h * st.y1f, st.ms, "tarikan (" + st.name + ")")
+        sleepMs(700)
+        scrollNo++
+        var r: Scr = s
+        var after = serverNums(cap(R_SERVER).also { r = it })
+        if (after.isEmpty()) after = serverNums(cap(R_SERVER).also { r = it })
+        if (after.isEmpty()) {
+            log("Geseran " + scrollNo + " (" + tag + "): daftar tidak terbaca setelah tarikan")
+            return null
+        }
+        return r
     }
 
     // Pastikan layar berisi maksimal 2 server baru dan minimal 1 server lama. Kalau lebih, geser balik pelan.
@@ -1033,9 +1055,9 @@ object Engine {
                 return Step(scr, true, false)
             }
             if (steps == 5) break
-            val back = if (oldCount == 0) 4 else (newCount - 2)
-            val dist = minOf(back * rh / 0.68f, scr.h * 0.55f)
-            val ys = scr.h * 0.30f
+            val back = if (oldCount == 0) 2 else (newCount - 2)
+            val dist = minOf(back * rh / 0.68f, scr.h * 0.40f)
+            val ys = scr.h * 0.45f
             doSwipe(scr.w * 0.77f, ys, scr.w * 0.78f, ys + dist, 300, "geser balik pelan (" + back + " baris)")
             sleepMs(500)
             scrollNo++
@@ -1059,39 +1081,46 @@ object Engine {
         var scr = s
 
         if (!listPulled) {
-            val auto = Prefs.swipeAuto
-            val styles = if (auto) STYLES else manualStyles()
-            val tries = if (auto) hardIdxs.size else 3
-            for (a in 0 until tries) {
-                val idx = if (auto) hardIdxs[(hardLevel + a) % hardIdxs.size] else 1
-                val st = styles[idx]
+            for (a in 0 until 5) {
                 val seenBefore = listSeen.size
-                doSwipe(s.w * st.xf, s.h * st.y0f, s.w * st.xf, s.h * st.y1f, st.ms, "tarikan pertama (" + st.name + ")")
-                sleepMs(700)
-                scrollNo++
-                var after = serverNums(cap(R_SERVER).also { scr = it })
-                if (after.isEmpty()) after = serverNums(cap(R_SERVER).also { scr = it })
-                if (after.isEmpty()) {
-                    log("Geseran " + scrollNo + " (" + tag + "): daftar tidak terbaca setelah " + st.name)
+                val idxUsed = pullIdx(a)
+                val r = pullOnce(s, a, tag)
+                if (r == null) {
+                    sleepMs(500)
                     continue
                 }
+                scr = r
+                val after = serverNums(r)
                 val extra = after.keys.count { !listSeen.contains(it) && it != cur }
                 for (k in after.keys) if (k != cur) listSeen.add(k)
                 // Daftar baru berisi 5 baris: kalau yang terlihat tidak melebihi 5, belum ada server yang dimuat
                 if (seenBefore + extra <= 5) {
-                    log("Geseran " + scrollNo + " (" + tag + "): " + st.name + " tidak memuat server baru (percobaan " + (a + 1) + "/" + tries + ")")
+                    log("Geseran " + scrollNo + " (" + tag + "): tarikan tidak memuat server baru (percobaan " + (a + 1) + "/5)")
+                    sleepMs(500)
                     continue
                 }
                 listPulled = true
-                if (auto) hardLevel = hardIdxs.indexOf(idx).coerceAtLeast(0)
-                log("Geseran " + scrollNo + " (" + tag + "): " + st.name + " memuat server baru, terlihat " + rangeText(after))
-                return settleWindow(scr, prev, tag)
+                pullFails = 0
+                if (Prefs.swipeAuto) hardLevel = hardIdxs.indexOf(idxUsed).coerceAtLeast(0)
+                log("Geseran " + scrollNo + " (" + tag + "): tarikan memuat server baru, terlihat " + rangeText(after))
+                return settleWindow(r, prev, tag)
             }
-            log("Geseran " + scrollNo + " (" + tag + "): tarikan pertama gagal memuat server baru setelah " + tries + " percobaan")
-            return Step(scr, false, true)
+            if (!listReopened) {
+                listReopened = true
+                log("Geseran " + scrollNo + " (" + tag + "): tarikan gagal 5 kali, membuka ulang Daftar Karakter sekali")
+                val fl = freshList()
+                if (fl != null) {
+                    beginList(fl, false)
+                    return scrollNext(fl, tag)
+                }
+            }
+            val msg = "Daftar tidak bisa digeser, baru " + listSeen.size + " dari " + expect + " server terlihat"
+            log("Geseran " + scrollNo + " (" + tag + "): " + msg)
+            if (expectOverride >= 0) return Step(scr, false, true)
+            throw Stop(msg)
         }
 
-        // Sesudah tarikan pertama: hanya geser pelan
+        // Sesudah tarikan pertama: geser pelan dulu
         val x0 = s.w * (if (Prefs.swipeAuto) 0.77f else Prefs.swipeX / 100f)
         val y0 = s.h * 0.66f
         val d = minOf(slowRows * rh, y0 - s.h * 0.06f)
@@ -1105,22 +1134,36 @@ object Engine {
             return Step(scr, false, true)
         }
         val globalNew = after.keys.count { !listSeen.contains(it) && it != cur }
-        if (globalNew == 0) {
-            listNoNew++
-            slowRows = minOf(slowRows + 1f, 6f)
-            for (k in after.keys) if (k != cur) listSeen.add(k)
-            log("Geseran " + scrollNo + " (" + tag + "): tidak ada server baru (" + listNoNew + "/3), terlihat " + rangeText(after))
-            if (listNoNew >= 3) {
-                log("Geseran " + scrollNo + " (" + tag + "): 3 geseran tanpa server baru, dianggap ujung daftar (terlihat " + listSeen.size + " server)")
-                return Step(scr, false, false)
-            }
-            return Step(scr, true, false)
+        if (globalNew > 0) {
+            pullFails = 0
+            val newVsPrev = after.keys.count { !prev.containsKey(it) && it != cur }
+            val res = settleWindow(scr, prev, tag)
+            slowRows = if (newVsPrev > 2) maxOf(2f, slowRows * 2f / newVsPrev) else 3.0f
+            return res
         }
-        listNoNew = 0
-        val newVsPrev = after.keys.count { !prev.containsKey(it) && it != cur }
-        val res = settleWindow(scr, prev, tag)
-        slowRows = if (newVsPrev > 2) maxOf(2f, slowRows * 2f / newVsPrev) else 3.0f
-        return res
+
+        // Geser pelan tidak memunculkan server baru: pakai tarikan manual lagi
+        for (k in after.keys) if (k != cur) listSeen.add(k)
+        log("Geseran " + scrollNo + " (" + tag + "): geser pelan tidak memunculkan server baru, memakai tarikan")
+        val r2 = pullOnce(scr, 0, tag)
+        if (r2 != null) {
+            scr = r2
+            val a2 = serverNums(r2)
+            val gn = a2.keys.count { !listSeen.contains(it) && it != cur }
+            for (k in a2.keys) if (k != cur) listSeen.add(k)
+            if (gn > 0) {
+                pullFails = 0
+                log("Geseran " + scrollNo + " (" + tag + "): tarikan memuat server baru, terlihat " + rangeText(a2))
+                return settleWindow(r2, after, tag)
+            }
+        }
+        pullFails++
+        log("Geseran " + scrollNo + " (" + tag + "): tarikan tidak memuat server baru (" + pullFails + "/2)")
+        if (pullFails >= 2) {
+            log("Geseran " + scrollNo + " (" + tag + "): 2 tarikan berturut-turut tanpa server baru, dianggap ujung daftar (terlihat " + listSeen.size + " server)")
+            return Step(scr, false, false)
+        }
+        return Step(scr, true, false)
     }
 
     // Geser daftar ke paling atas (berhenti kalau daftar tidak bergerak lagi)
