@@ -1005,7 +1005,37 @@ object Engine {
     private var listReopened = false
     private var pullFails = 0
     private var slowRows = 3.0f
+    private var idleSlow = 0
     private var expectOverride = -1
+    // Urutan baris yang pernah terlihat di daftar (atas ke bawah). Dipakai untuk tahu apakah layar sudah di baris terdalam.
+    private val rowOrder = ArrayList<String>()
+
+    private fun mergeRows(keys: List<String>) {
+        for (i in keys.indices) {
+            val k = keys[i]
+            if (k == cur || rowOrder.contains(k)) continue
+            var at = -1
+            var j = i - 1
+            while (j >= 0 && at < 0) {
+                val idx = rowOrder.indexOf(keys[j])
+                if (idx >= 0) at = idx + 1
+                j--
+            }
+            j = i + 1
+            while (j < keys.size && at < 0) {
+                val idx = rowOrder.indexOf(keys[j])
+                if (idx >= 0) at = idx
+                j++
+            }
+            if (at < 0) rowOrder.add(k) else rowOrder.add(at, k)
+        }
+    }
+
+    // Baris terbawah di layar sama dengan baris terdalam yang pernah terlihat
+    private fun atFrontier(rows: Map<String, Line>): Boolean {
+        val bottom = rows.keys.lastOrNull() ?: return false
+        return rowOrder.isNotEmpty() && rowOrder.last() == bottom
+    }
 
     private fun expectRows(): Int =
         if (expectOverride >= 0) expectOverride else (Prefs.serverCount - 1).coerceAtLeast(0)
@@ -1016,8 +1046,11 @@ object Engine {
         listPulled = false
         pullFails = 0
         slowRows = 3.0f
+        idleSlow = 0
+        rowOrder.clear()
         if (resetReopen) listReopened = false
         for (k in serverNums(s).keys) if (k != cur) listSeen.add(k)
+        mergeRows(serverNums(s).keys.toList())
     }
 
     private fun pullIdx(a: Int): Int = if (Prefs.swipeAuto) hardIdxs[(hardLevel + a) % hardIdxs.size] else 1
@@ -1047,6 +1080,7 @@ object Engine {
         var steps = 0
         while (steps <= 5) {
             for (k in rows.keys) if (k != cur) listSeen.add(k)
+            mergeRows(rows.keys.toList())
             val newCount = rows.keys.count { !prev.containsKey(it) && it != cur }
             val oldCount = rows.keys.count { prev.containsKey(it) }
             if (newCount <= 2 && (oldCount >= 1 || prev.isEmpty())) {
@@ -1078,6 +1112,7 @@ object Engine {
         val rh = rowH(s)
         val prev = serverNums(s)
         for (k in prev.keys) if (k != cur) listSeen.add(k)
+        mergeRows(prev.keys.toList())
         var scr = s
 
         if (!listPulled) {
@@ -1093,6 +1128,7 @@ object Engine {
                 val after = serverNums(r)
                 val extra = after.keys.count { !listSeen.contains(it) && it != cur }
                 for (k in after.keys) if (k != cur) listSeen.add(k)
+                mergeRows(after.keys.toList())
                 // Daftar baru berisi 5 baris: kalau yang terlihat tidak melebihi 5, belum ada server yang dimuat
                 if (seenBefore + extra <= 5) {
                     log("Geseran " + scrollNo + " (" + tag + "): tarikan tidak memuat server baru (percobaan " + (a + 1) + "/5)")
@@ -1136,21 +1172,30 @@ object Engine {
         val globalNew = after.keys.count { !listSeen.contains(it) && it != cur }
         if (globalNew > 0) {
             pullFails = 0
+            idleSlow = 0
             val newVsPrev = after.keys.count { !prev.containsKey(it) && it != cur }
             val res = settleWindow(scr, prev, tag)
             slowRows = if (newVsPrev > 2) maxOf(2f, slowRows * 2f / newVsPrev) else 3.0f
             return res
         }
 
-        // Geser pelan tidak memunculkan server baru: pakai tarikan manual lagi
+        // Tidak ada server baru. Kalau layar belum di baris terdalam yang pernah terlihat, lanjut geser pelan.
         for (k in after.keys) if (k != cur) listSeen.add(k)
-        log("Geseran " + scrollNo + " (" + tag + "): geser pelan tidak memunculkan server baru, memakai tarikan")
+        mergeRows(after.keys.toList())
+        idleSlow++
+        if (!atFrontier(after) && idleSlow <= 6) {
+            log("Geseran " + scrollNo + " (" + tag + "): melewati baris yang sudah terlihat, layar " + rangeText(after) + " (belum di baris terdalam)")
+            return Step(scr, true, false)
+        }
+        idleSlow = 0
+        log("Geseran " + scrollNo + " (" + tag + "): di baris terdalam " + rangeText(after) + " tanpa server baru, memakai tarikan")
         val r2 = pullOnce(scr, 0, tag)
         if (r2 != null) {
             scr = r2
             val a2 = serverNums(r2)
             val gn = a2.keys.count { !listSeen.contains(it) && it != cur }
             for (k in a2.keys) if (k != cur) listSeen.add(k)
+            mergeRows(a2.keys.toList())
             if (gn > 0) {
                 pullFails = 0
                 log("Geseran " + scrollNo + " (" + tag + "): tarikan memuat server baru, terlihat " + rangeText(a2))
@@ -2207,7 +2252,7 @@ object Engine {
         val bottom = if (s != null) serverNums(s).entries.maxByOrNull { it.value.cy }?.key else null
         val ok = listSeen.size >= expect
         log("UJI SAMPAI BAWAH: terlihat " + listSeen.size + " dari " + expect + " server dalam " + steps + " geseran, " + secs + " detik. Baris terbawah di layar: " + (bottom ?: "-"))
-        log("UJI SAMPAI BAWAH: urutan terlihat: " + listSeen.joinToString(","))
+        log("UJI SAMPAI BAWAH: urutan baris: " + rowOrder.joinToString(","))
         log("UJI SAMPAI BAWAH: " + (if (ok) "SEMUA SERVER TERJANGKAU" else "TIDAK SEMUA TERJANGKAU"))
         ClaimService.inst?.banner(
             if (ok) "Semua " + expect + " server terjangkau (" + secs + " dtk)" else "Hanya " + listSeen.size + " dari " + expect + " server terjangkau",
