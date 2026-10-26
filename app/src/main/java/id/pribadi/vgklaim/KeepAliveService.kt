@@ -45,7 +45,8 @@ class KeepAliveService : Service() {
             val n = Notification.Builder(this, CH)
                 .setContentTitle("VG Klaim berjalan")
                 .setContentText("Klaim otomatis sedang berjalan")
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setSmallIcon(R.drawable.ic_stat_vg)
+                .setColor(android.graphics.Color.parseColor("#E2C275"))
                 .setOngoing(true)
                 .build()
             if (Build.VERSION.SDK_INT >= 34) {
