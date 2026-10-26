@@ -575,9 +575,15 @@ class MainActivity : Activity() {
             }))
         }
         if (!Prefs.swipeAuto) {
-            field("Tarikan keras (ms)", Prefs.swipeHardMs) { Prefs.swipeHardMs = it }
-            field("Titik awal (% tinggi)", Prefs.swipeStart) { Prefs.swipeStart = it }
-            field("Titik akhir (% tinggi)", Prefs.swipeEnd) { Prefs.swipeEnd = it }
+            field("Geser cepat: durasi (ms)", Prefs.swipeHardMs) { Prefs.swipeHardMs = it }
+            field("Geser cepat: awal (% tinggi)", Prefs.swipeStart) { Prefs.swipeStart = it }
+            field("Geser cepat: akhir (% tinggi)", Prefs.swipeEnd) { Prefs.swipeEnd = it }
+            field("Geser pelan: durasi (ms)", Prefs.swipeSlowMs) { Prefs.swipeSlowMs = it }
+            field("Geser pelan: awal (% tinggi)", Prefs.swipeSlowStart) { Prefs.swipeSlowStart = it }
+            field("Geser pelan: akhir (% tinggi)", Prefs.swipeSlowEnd) { Prefs.swipeSlowEnd = it }
+            field("Geser balik: durasi (ms)", Prefs.swipeBackMs) { Prefs.swipeBackMs = it }
+            field("Geser balik: awal (% tinggi)", Prefs.swipeBackStart) { Prefs.swipeBackStart = it }
+            field("Geser balik: akhir (% tinggi)", Prefs.swipeBackEnd) { Prefs.swipeBackEnd = it }
             field("Posisi X (% lebar)", Prefs.swipeX) { Prefs.swipeX = it }
         }
         field("Jumlah server (uji)", Prefs.testCount) { Prefs.testCount = it }
@@ -679,7 +685,7 @@ class MainActivity : Activity() {
         "Titik melayang saat klaim" to "Titik tak terlihat yang membuat baca layar sekitar 10 kali lebih cepat. Gayanya dipilih lewat Diagnosa umum.",
         "Jeda antar langkah" to "Lama bot menunggu setelah tiap ketukan sebelum melihat layar lagi, dalam milidetik. 0 berarti tanpa jeda.",
         "Waktu tunggu lobby" to "Dalam milidetik. Dipakai hanya kalau lobby langsung muncul setelah loading tanpa popup apa pun: bot menunggu paling lama selama ini untuk popup. Begitu satu popup muncul dan ditutup, bot langsung lanjut. Kalau popup sudah muncul dan ditutup sebelum lobby, waktu ini dilewati.",
-        "Geser daftar server" to "Geseran pertama di daftar baru adalah tarikan keras yang memuat server baru. Otomatis: bot mencoba tingkat tarikan sampai berhasil dan mengingatnya. Manual: memakai angka Anda. Sesudah itu bot hanya geser pelan, dengan maksimal 2 server baru per layar. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot menggeser sampai ujung dan melaporkan berapa server yang terlihat.",
+        "Geser daftar server" to "Geser cepat memuat server baru di ujung daftar (dipakai pertama kali daftar dibuka dan kalau geser pelan tidak menggerakkan layar). Geser pelan menggeser daftar maju. Geser balik menggeser daftar mundur untuk merapikan layar. Angka awal dan akhir adalah persen tinggi layar: 0 di atas, 100 di bawah. Otomatis: bot mencoba tingkat geser cepat sampai berhasil dan mengingatnya. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot menggeser sampai ujung dan melaporkan berapa server yang terlihat.",
         "Jenis diagnosa" to "Umum / OCR mengukur kecepatan baca dan memilih gaya titik. Geser daftar menguji gesekan di Daftar Karakter. Tombol Diagnosa ada di tab Log.",
         "Ulangi dari awal" to "Menghapus catatan server yang sudah selesai hari ini."
     )
