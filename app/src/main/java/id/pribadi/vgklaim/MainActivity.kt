@@ -8,10 +8,15 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
+import android.graphics.drawable.StateListDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -42,6 +47,29 @@ private val C_LINE = Color.parseColor("#2C3A5E")
 private val C_ACC = Color.parseColor("#E2C275")
 private val C_ONACC = Color.parseColor("#1A1405")
 private val C_SURF = Color.parseColor("#111A30")
+
+// Ikon kembali (chevron) yang sama dengan rancangan
+private class BackIcon(ctx: Context) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    init {
+        p.style = Paint.Style.STROKE
+        p.strokeCap = Paint.Cap.ROUND
+        p.strokeJoin = Paint.Join.ROUND
+        p.color = C_FG
+        p.strokeWidth = 2.4f * ctx.resources.displayMetrics.density
+    }
+
+    override fun onDraw(c: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val path = Path()
+        path.moveTo(w * 0.60f, h * 0.30f)
+        path.lineTo(w * 0.40f, h * 0.50f)
+        path.lineTo(w * 0.60f, h * 0.70f)
+        c.drawPath(path, p)
+    }
+}
 
 class MainActivity : Activity() {
 
@@ -171,9 +199,36 @@ class MainActivity : Activity() {
     private fun switchRow(label: String, get: () -> Boolean, set: (Boolean) -> Unit): View {
         val sw = Switch(this)
         sw.isChecked = get()
-        val st = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
-        sw.thumbTintList = ColorStateList(st, intArrayOf(C_ONACC, C_MUT))
-        sw.trackTintList = ColorStateList(st, intArrayOf(C_ACC, C_LINE))
+        sw.thumbTintList = null
+        sw.trackTintList = null
+        // Gelap/emas penuh seperti rancangan: nyala = jalur emas + bulatan gelap, mati = jalur garis + bulatan abu
+        val trOn = GradientDrawable()
+        trOn.setColor(C_ACC)
+        trOn.setStroke(dp(2), C_ACC)
+        trOn.cornerRadius = dp(16).toFloat()
+        trOn.setSize(dp(56), dp(32))
+        val trOff = GradientDrawable()
+        trOff.setColor(Color.TRANSPARENT)
+        trOff.setStroke(dp(2), C_LINE)
+        trOff.cornerRadius = dp(16).toFloat()
+        trOff.setSize(dp(56), dp(32))
+        val track = StateListDrawable()
+        track.addState(intArrayOf(android.R.attr.state_checked), trOn)
+        track.addState(intArrayOf(), trOff)
+        val knOn = GradientDrawable()
+        knOn.shape = GradientDrawable.OVAL
+        knOn.setColor(C_ONACC)
+        knOn.setSize(dp(22), dp(22))
+        val knOff = GradientDrawable()
+        knOff.shape = GradientDrawable.OVAL
+        knOff.setColor(C_MUT)
+        knOff.setSize(dp(22), dp(22))
+        val thumb = StateListDrawable()
+        thumb.addState(intArrayOf(android.R.attr.state_checked), InsetDrawable(knOn, dp(4)))
+        thumb.addState(intArrayOf(), InsetDrawable(knOff, dp(4)))
+        sw.trackDrawable = track
+        sw.thumbDrawable = thumb
+        sw.switchMinWidth = dp(56)
         sw.setOnCheckedChangeListener { _, c -> set(c) }
         return row(label, sw)
     }
@@ -274,11 +329,8 @@ class MainActivity : Activity() {
         hd.setPadding(dp(24), dp(8), dp(12), 0)
         hd.minimumHeight = dp(64)
         if (back) {
-            val b = TextView(this)
-            b.text = "\u2190"
-            b.textSize = 26f
-            b.setTextColor(C_FG)
-            b.gravity = Gravity.CENTER
+            val b = BackIcon(this)
+            b.contentDescription = "Kembali"
             b.setOnClickListener {
                 help = false
                 render()
@@ -366,6 +418,13 @@ class MainActivity : Activity() {
             nav.addView(b, lp)
         }
         root.addView(nav)
+        // Saat keyboard tampil, tab bawah disembunyikan (tidak ikut naik di atas keyboard)
+        root.viewTreeObserver.addOnGlobalLayoutListener {
+            val r = android.graphics.Rect()
+            root.getWindowVisibleDisplayFrame(r)
+            val sh = root.rootView.height
+            nav.visibility = if (sh - r.bottom > sh * 0.15f) View.GONE else View.VISIBLE
+        }
         setContentView(root)
         tick()
     }
@@ -572,12 +631,6 @@ class MainActivity : Activity() {
         field("Geser balik: awal (% tinggi)", Prefs.swipeBackStart) { Prefs.swipeBackStart = it }
         field("Geser balik: akhir (% tinggi)", Prefs.swipeBackEnd) { Prefs.swipeBackEnd = it }
         field("Posisi X (% lebar)", Prefs.swipeX) { Prefs.swipeX = it }
-        gviews.add(divider())
-        gviews.add(switchRow("Geser persiapan", { Prefs.prepOn }, { Prefs.prepOn = it }))
-        field("Persiapan: durasi (ms)", Prefs.prepMs) { Prefs.prepMs = it }
-        field("Persiapan: awal (% tinggi)", Prefs.prepStart) { Prefs.prepStart = it }
-        field("Persiapan: akhir (% tinggi)", Prefs.prepEnd) { Prefs.prepEnd = it }
-        field("Jeda sebelum geser pertama (ms)", Prefs.prepDelayMs) { Prefs.prepDelayMs = it }
         field("Jumlah server (uji)", Prefs.testCount) { Prefs.testCount = it }
         val bb = LinearLayout(this)
         bb.orientation = LinearLayout.HORIZONTAL
@@ -620,16 +673,44 @@ class MainActivity : Activity() {
     private fun pickGame(label: TextView) {
         var apps = Engine.listApps(this, false)
         if (apps.isEmpty()) apps = Engine.listApps(this, true)
-        val labels = ArrayList<String>()
-        labels.add("Otomatis (cari Mobile Legends)")
-        for (a in apps) labels.add(a.second + "\n" + a.first)
-        AlertDialog.Builder(this)
-            .setTitle("Pilih game")
-            .setItems(labels.toTypedArray()) { _, which ->
-                Prefs.pkg = if (which == 0) "" else apps[which - 1].first
+        val d = Dialog(this)
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(dp(22), dp(20), dp(22), dp(12))
+        box.background = shape(C_POP, C_ACC, 28)
+        box.addView(tv("Pilih game", 20f, true))
+        val list = LinearLayout(this)
+        list.orientation = LinearLayout.VERTICAL
+        fun item(title: String, sub: String, pkg: String) {
+            if (list.childCount > 0) list.addView(divider())
+            val rowV = LinearLayout(this)
+            rowV.orientation = LinearLayout.VERTICAL
+            rowV.gravity = Gravity.CENTER_VERTICAL
+            rowV.minimumHeight = dp(60)
+            rowV.setPadding(0, dp(8), 0, dp(8))
+            rowV.addView(tv(title, 16f, false, if (Prefs.pkg == pkg) C_ACC else C_FG))
+            if (sub.isNotEmpty()) rowV.addView(tv(sub, 13f, false, C_MUT))
+            rowV.setOnClickListener {
+                Prefs.pkg = pkg
                 label.text = gameShort()
+                d.dismiss()
             }
-            .show()
+            list.addView(rowV)
+        }
+        item("Otomatis (cari Mobile Legends)", "", "")
+        for (a in apps) item(a.second, a.first, a.first)
+        val sv = ScrollView(this)
+        sv.addView(list)
+        val svp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        svp.topMargin = dp(8)
+        box.addView(sv, svp)
+        d.setContentView(box)
+        d.window?.let { w ->
+            w.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            w.setLayout((resources.displayMetrics.widthPixels * 0.9f).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        d.show()
     }
 
     // ---------- menu titik tiga dan layar Fungsi pengaturan ----------
@@ -667,13 +748,13 @@ class MainActivity : Activity() {
         "Aksesibilitas" to "Layanan yang dipakai untuk screenshot dan ketukan. Harus aktif. Nyalakan lagi setelah memasang pembaruan.",
         "Baterai" to "Atur ke tanpa batasan supaya sistem tidak membatasi kecepatan baca layar.",
         "Aplikasi game" to "Pilih aplikasi Mobile Legends yang dibuka bot.",
-        "Jumlah server" to "Isi jumlah semua server akun ini, termasuk server yang sedang dipakai. Wajib diisi. Bot berhenti mencari server begitu semuanya sudah terlihat. Kalau daftar berhenti bergerak sebelum semua terlihat, bot berhenti dengan pesan, bukan menebak ujung daftar.",
+        "Jumlah server" to "Isi jumlah semua server akun ini, termasuk server yang sedang dipakai (awalnya 20). Wajib diisi. Bot terus mencari sampai semua server terlihat, dan tidak berhenti sebelum itu.",
         "Setelah selesai" to "Yang dilakukan bot setelah semua server selesai. VG Klaim dan Home menutup game. Tetap di game tidak menutupnya. Banner hasil klaim selalu tampil.",
         "Lewati server di atas posisi sekarang" to "Server yang urutannya di atas server awal dianggap sudah selesai dan tidak diklaim.",
         "Titik melayang saat klaim" to "Titik tak terlihat yang membuat baca layar sekitar 10 kali lebih cepat. Gayanya dipilih lewat Diagnosa umum.",
         "Jeda antar langkah" to "Lama bot menunggu setelah tiap ketukan sebelum melihat layar lagi, dalam milidetik. 0 berarti tanpa jeda.",
         "Waktu tunggu lobby" to "Dalam milidetik. Dipakai hanya kalau lobby langsung muncul setelah loading tanpa popup apa pun: bot menunggu paling lama selama ini untuk popup. Begitu satu popup muncul dan ditutup, bot langsung lanjut. Kalau popup sudah muncul dan ditutup sebelum lobby, waktu ini dilewati.",
-        "Geser daftar server" to "Geser cepat memuat server baru dan HANYA dipakai sekali, saat pertama mencari server baru di daftar yang baru dibuka. Sesudah itu bot hanya geser pelan. Geser pelan menggeser daftar maju. Geser balik menggeser daftar mundur, hanya sampai 1 server lama terlihat lagi. Geser persiapan dijalankan sekali sebelum geser cepat pertama (bisa dimatikan), dan Jeda sebelum geser pertama (ms) menunggu sejak daftar terbaca (0 = tanpa jeda). Angka awal dan akhir adalah persen tinggi layar: 0 di atas, 100 di bawah. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot menggeser sampai ujung dan melaporkan berapa server yang terlihat.",
+        "Geser daftar server" to "Geser cepat memuat server baru dan HANYA dipakai sekali, saat pertama mencari server baru di daftar yang baru dibuka. Sesudah itu bot hanya geser pelan. Geser pelan menggeser daftar maju. Geser balik menggeser daftar mundur, hanya kalau tidak ada server lama yang terlihat. Angka awal dan akhir adalah persen tinggi layar: 0 di atas, 100 di bawah. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot terus menggeser sampai semua server terlihat dan melaporkan hasilnya.",
         "Jenis diagnosa" to "Umum / OCR mengukur kecepatan baca dan memilih gaya titik. Geser daftar menguji gesekan di Daftar Karakter. Tombol Diagnosa ada di tab Log.",
         "Ulangi dari awal" to "Menghapus catatan server yang sudah selesai hari ini."
     )
