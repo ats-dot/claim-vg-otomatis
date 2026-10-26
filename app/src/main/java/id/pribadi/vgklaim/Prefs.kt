@@ -45,26 +45,16 @@ object Prefs {
         get() = s().getInt("diag_mode", 0)
         set(v) { s().edit().putInt("diag_mode", v).apply() }
 
-    // Tingkat gesekan keras yang terakhir berhasil memuat baris server baru (0-4), diingat antar sesi
-    var hardLevel: Int
-        get() = s().getInt("hard_level", 0)
-        set(v) { s().edit().putInt("hard_level", v).apply() }
-
-    // Geser daftar server: true = otomatis (bot mencoba tingkat gesekan), false = pakai angka manual di bawah
-    var swipeAuto: Boolean
-        get() = s().getBoolean("swipe_auto", true)
-        set(v) { s().edit().putBoolean("swipe_auto", v).apply() }
-
     var swipeHardMs: Int
-        get() = s().getInt("swipe_hard_ms", 120)
+        get() = s().getInt("swipe_hard_ms", 150)
         set(v) { s().edit().putInt("swipe_hard_ms", v.coerceIn(40, 400)).apply() }
 
     var swipeStart: Int
-        get() = s().getInt("swipe_start", 66)
+        get() = s().getInt("swipe_start", 55)
         set(v) { s().edit().putInt("swipe_start", v.coerceIn(20, 95)).apply() }
 
     var swipeEnd: Int
-        get() = s().getInt("swipe_end", 8)
+        get() = s().getInt("swipe_end", 10)
         set(v) { s().edit().putInt("swipe_end", v.coerceIn(0, 60)).apply() }
 
     var swipeX: Int
@@ -72,7 +62,7 @@ object Prefs {
         set(v) { s().edit().putInt("swipe_x", v.coerceIn(10, 95)).apply() }
 
     var swipeSlowMs: Int
-        get() = s().getInt("swipe_slow_ms", 300)
+        get() = s().getInt("swipe_slow_ms", 200)
         set(v) { s().edit().putInt("swipe_slow_ms", v.coerceIn(100, 1000)).apply() }
 
     // Jumlah server untuk Uji sampai bawah
@@ -82,11 +72,11 @@ object Prefs {
 
     // Geser pelan (menggeser daftar maju) dan geser balik (menggeser daftar mundur), semua dalam persen tinggi layar
     var swipeSlowStart: Int
-        get() = s().getInt("swipe_slow_start", 66)
+        get() = s().getInt("swipe_slow_start", 60)
         set(v) { s().edit().putInt("swipe_slow_start", v.coerceIn(0, 100)).apply() }
 
     var swipeSlowEnd: Int
-        get() = s().getInt("swipe_slow_end", 42)
+        get() = s().getInt("swipe_slow_end", 47)
         set(v) { s().edit().putInt("swipe_slow_end", v.coerceIn(0, 100)).apply() }
 
     var swipeBackStart: Int
@@ -94,24 +84,51 @@ object Prefs {
         set(v) { s().edit().putInt("swipe_back_start", v.coerceIn(0, 100)).apply() }
 
     var swipeBackEnd: Int
-        get() = s().getInt("swipe_back_end", 68)
+        get() = s().getInt("swipe_back_end", 58)
         set(v) { s().edit().putInt("swipe_back_end", v.coerceIn(0, 100)).apply() }
 
     var swipeBackMs: Int
-        get() = s().getInt("swipe_back_ms", 300)
+        get() = s().getInt("swipe_back_ms", 200)
         set(v) { s().edit().putInt("swipe_back_ms", v.coerceIn(100, 1000)).apply() }
 
+    // Geser persiapan: dijalankan SEKALI sebelum geser cepat pertama pada daftar yang baru dibuka (bisa dimatikan)
+    var prepOn: Boolean
+        get() = s().getBoolean("prep_on", true)
+        set(v) { s().edit().putBoolean("prep_on", v).apply() }
+
+    var prepMs: Int
+        get() = s().getInt("prep_ms", 200)
+        set(v) { s().edit().putInt("prep_ms", v.coerceIn(100, 1000)).apply() }
+
+    var prepStart: Int
+        get() = s().getInt("prep_start", 60)
+        set(v) { s().edit().putInt("prep_start", v.coerceIn(0, 100)).apply() }
+
+    var prepEnd: Int
+        get() = s().getInt("prep_end", 47)
+        set(v) { s().edit().putInt("prep_end", v.coerceIn(0, 100)).apply() }
+
+    // Jeda (ms) sejak daftar terbaca sampai geser pertama. 0 = tanpa jeda
+    var prepDelayMs: Int
+        get() = s().getInt("prep_delay_ms", 1000)
+        set(v) { s().edit().putInt("prep_delay_ms", v.coerceIn(0, 5000)).apply() }
+
     fun resetSwipe() {
-        swipeHardMs = 120
-        swipeStart = 66
-        swipeEnd = 8
+        prepOn = true
+        prepMs = 200
+        prepStart = 60
+        prepEnd = 47
+        prepDelayMs = 1000
+        swipeHardMs = 150
+        swipeStart = 55
+        swipeEnd = 10
         swipeX = 77
-        swipeSlowMs = 300
-        swipeSlowStart = 66
-        swipeSlowEnd = 42
+        swipeSlowMs = 200
+        swipeSlowStart = 60
+        swipeSlowEnd = 47
         swipeBackStart = 45
-        swipeBackEnd = 68
-        swipeBackMs = 300
+        swipeBackEnd = 58
+        swipeBackMs = 200
     }
 
     var dotAuto: Boolean
