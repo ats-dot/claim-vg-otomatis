@@ -404,14 +404,19 @@ class MainActivity : Activity() {
         col.addView(card(stBox), lpw(0, 4))
 
         val cnt = numBox(if (Prefs.serverCount > 0) Prefs.serverCount.toString() else "")
-        cnt.hint = "Otomatis"
+        cnt.hint = "Wajib diisi"
         col.addView(card(row("Jumlah server", cnt)), lpw(0, 12))
 
         val spacer = View(this)
         col.addView(spacer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         col.addView(btn("MULAI KLAIM", true) {
-            Prefs.serverCount = cnt.text.toString().trim().toIntOrNull() ?: 0
+            val n = cnt.text.toString().trim().toIntOrNull() ?: 0
+            if (n < 2) {
+                toast("Isi Jumlah server dulu (angka 2 atau lebih)")
+                return@btn
+            }
+            Prefs.serverCount = n
             if (android.os.Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
             ) {
@@ -562,26 +567,30 @@ class MainActivity : Activity() {
         modeBox.addView(modeSeg)
         val gviews = ArrayList<View>()
         gviews.add(modeBox)
+        fun field(label: String, value: Int, set: (Int) -> Unit) {
+            gviews.add(divider())
+            gviews.add(row(label, numBox(value.toString()) { s ->
+                val n = s.trim().toIntOrNull()
+                if (n != null) set(n)
+            }))
+        }
         if (!Prefs.swipeAuto) {
-            fun field(label: String, value: Int, set: (Int) -> Unit) {
-                gviews.add(divider())
-                gviews.add(row(label, numBox(value.toString()) { s ->
-                    val n = s.trim().toIntOrNull()
-                    if (n != null) set(n)
-                }))
-            }
-            field("Gesekan keras (ms)", Prefs.swipeHardMs) { Prefs.swipeHardMs = it }
+            field("Tarikan keras (ms)", Prefs.swipeHardMs) { Prefs.swipeHardMs = it }
             field("Titik awal (% tinggi)", Prefs.swipeStart) { Prefs.swipeStart = it }
             field("Titik akhir (% tinggi)", Prefs.swipeEnd) { Prefs.swipeEnd = it }
             field("Posisi X (% lebar)", Prefs.swipeX) { Prefs.swipeX = it }
-            field("Gesekan pelan (ms)", Prefs.swipeSlowMs) { Prefs.swipeSlowMs = it }
-            val bb = LinearLayout(this)
-            bb.orientation = LinearLayout.HORIZONTAL
-            bb.setPadding(0, dp(12), 0, dp(12))
-            val t1 = btn("Uji gesekan", true) {
-                Engine.diagnose(applicationContext, true)
-                toast("Buka Daftar Karakter, pindah ke game dalam 15 detik, lalu diam")
-            }
+        }
+        field("Jumlah server (uji)", Prefs.testCount) { Prefs.testCount = it }
+        val bb = LinearLayout(this)
+        bb.orientation = LinearLayout.HORIZONTAL
+        bb.setPadding(0, dp(12), 0, dp(12))
+        val t1 = btn("Uji sampai bawah", true) {
+            Engine.diagnose(applicationContext, true)
+            toast("Buka Daftar Karakter, pindah ke game dalam 15 detik, lalu diam")
+        }
+        if (Prefs.swipeAuto) {
+            bb.addView(t1, LinearLayout.LayoutParams(0, dp(48), 1f))
+        } else {
             val t2 = btn("Bawaan") {
                 Prefs.resetSwipe()
                 render()
@@ -592,9 +601,9 @@ class MainActivity : Activity() {
             p2.setMargins(dp(4), 0, 0, 0)
             bb.addView(t1, p1)
             bb.addView(t2, p2)
-            gviews.add(divider())
-            gviews.add(bb)
         }
+        gviews.add(divider())
+        gviews.add(bb)
         col.addView(section("Geser daftar server", card(*gviews.toTypedArray())), lpw(0, 16))
 
         // Diagnosa
@@ -664,12 +673,13 @@ class MainActivity : Activity() {
         "Aksesibilitas" to "Layanan yang dipakai untuk screenshot dan ketukan. Harus aktif. Nyalakan lagi setelah memasang pembaruan.",
         "Baterai" to "Atur ke tanpa batasan supaya sistem tidak membatasi kecepatan baca layar.",
         "Aplikasi game" to "Pilih aplikasi Mobile Legends yang dibuka bot.",
+        "Jumlah server" to "Isi jumlah semua server akun ini, termasuk server yang sedang dipakai. Wajib diisi. Bot berhenti mencari server begitu semuanya sudah terlihat.",
         "Setelah selesai" to "Yang dilakukan bot setelah semua server selesai. VG Klaim dan Home menutup game. Tetap di game tidak menutupnya. Banner hasil klaim selalu tampil.",
         "Lewati server di atas posisi sekarang" to "Server yang urutannya di atas server awal dianggap sudah selesai dan tidak diklaim.",
         "Titik melayang saat klaim" to "Titik tak terlihat yang membuat baca layar sekitar 10 kali lebih cepat. Gayanya dipilih lewat Diagnosa umum.",
         "Jeda antar langkah" to "Lama bot menunggu setelah tiap ketukan sebelum melihat layar lagi, dalam milidetik. 0 berarti tanpa jeda.",
-        "Waktu tunggu lobby" to "Dalam milidetik. Dipakai hanya kalau lobby langsung muncul setelah loading tanpa popup apa pun: bot menunggu selama ini untuk popup yang mungkin muncul. Kalau popup sudah muncul dan ditutup sebelum lobby, waktu ini dilewati.",
-        "Geser daftar server" to "Otomatis: bot mencoba tingkat gesekan sampai berhasil dan mengingatnya. Manual: memakai angka Anda. Uji gesekan menampilkan hasilnya lewat banner.",
+        "Waktu tunggu lobby" to "Dalam milidetik. Dipakai hanya kalau lobby langsung muncul setelah loading tanpa popup apa pun: bot menunggu paling lama selama ini untuk popup. Begitu satu popup muncul dan ditutup, bot langsung lanjut. Kalau popup sudah muncul dan ditutup sebelum lobby, waktu ini dilewati.",
+        "Geser daftar server" to "Geseran pertama di daftar baru adalah tarikan keras yang memuat server baru. Otomatis: bot mencoba tingkat tarikan sampai berhasil dan mengingatnya. Manual: memakai angka Anda. Sesudah itu bot hanya geser pelan, dengan maksimal 2 server baru per layar. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot menggeser sampai ujung dan melaporkan berapa server yang terlihat.",
         "Jenis diagnosa" to "Umum / OCR mengukur kecepatan baca dan memilih gaya titik. Geser daftar menguji gesekan di Daftar Karakter. Tombol Diagnosa ada di tab Log.",
         "Ulangi dari awal" to "Menghapus catatan server yang sudah selesai hari ini."
     )
