@@ -2218,7 +2218,7 @@ object Engine {
             "Geser cepat " + Prefs.swipeStart + "% ke " + Prefs.swipeEnd + "%, " + Prefs.swipeHardMs + "ms; geser pelan " +
                 Prefs.swipeSlowStart + "% ke " + Prefs.swipeSlowEnd + "%, " + Prefs.swipeSlowMs + "ms; geser balik " + Prefs.swipeBackStart + "% ke " + Prefs.swipeBackEnd + "%, " +
                 Prefs.swipeBackMs + "ms; x " + Prefs.swipeX + "%; persiapan " +
-                (if (Prefs.prepOn) Prefs.prepStart + "% ke " + Prefs.prepEnd + "%, " + Prefs.prepMs + "ms" else "mati") + "; jeda awal " + Prefs.prepDelayMs + "ms")
+                (if (Prefs.prepOn) "" + Prefs.prepStart + "% ke " + Prefs.prepEnd + "%, " + Prefs.prepMs + "ms" else "mati") + "; jeda awal " + Prefs.prepDelayMs + "ms")
         if (!isServerList(s0)) {
             log("UJI SAMPAI BAWAH: ini bukan Daftar Karakter (teks: " + s0.all.take(100) + "). Buka Daftar Karakter lalu ulangi.")
             ClaimService.inst?.banner("Buka Daftar Karakter dulu, lalu ulangi uji", 8000L, false)
