@@ -94,7 +94,7 @@ object Engine {
     fun start(ctx: Context): String? {
         Prefs.init(ctx)
         if (running) return "Sudah berjalan"
-        if (ClaimService.inst == null) return "Aktifkan dulu Aksesibilitas VG Klaim (tab Setelan)"
+        if (ClaimService.inst == null) return "Aktifkan dulu Aksesibilitas VG Klaim (tab Pengaturan)"
         app = ctx.applicationContext
         Matcher.reload(ctx.applicationContext)
         running = true
@@ -337,9 +337,10 @@ object Engine {
             "; memori " + used + "/" + (rt.maxMemory() / 1048576L) + " MB"
     }
 
-    // Jeda setelah ketukan: 0 kalau "Mode tanpa jeda" aktif, selain itu sesuai pengaturan milidetik
+    // Jeda setelah ketukan sesuai pengaturan (milidetik). 0 berarti tanpa jeda.
     private fun stepWait() {
-        if (!Prefs.noDelay) sleepMs(Prefs.stepMs.toLong().coerceIn(0L, 3000L))
+        val ms = Prefs.stepMs.toLong().coerceIn(0L, 3000L)
+        if (ms > 0L) sleepMs(ms)
     }
 
     // repeat=true: ketukan berulang di titik sama memang disengaja (tidak dianggap dobel)
@@ -576,7 +577,17 @@ object Engine {
         return true
     }
 
+    // true kalau sudah ada popup yang muncul (dan ditangani) sejak mulai menunggu lobby.
+    // Kalau sudah ada, waktu tunggu lobby tidak dipakai lagi (popupnya sudah keluar sebelum lobby).
+    @Volatile private var popupSeen = false
+
     private fun popups(s: Scr): Boolean {
+        val r = popupsRaw(s)
+        if (r) popupSeen = true
+        return r
+    }
+
+    private fun popupsRaw(s: Scr): Boolean {
         if (s.has("bonuslogin") && !eventOpen(s) && !isLobby(s)) {
             log("Layar Bonus Login 9 Hari muncul, ditutup tanpa klaim")
             if (flip++ % 2 == 0) tapArrow(s) else back()
@@ -622,6 +633,7 @@ object Engine {
     }
 
     private fun awaitLobby(maxSec: Int, needLoad: Boolean = false): Scr {
+        popupSeen = false
         val t0 = now()
         var okCount = 0
         var relaunched = 0
@@ -694,7 +706,7 @@ object Engine {
                 sleepMs(500)
             }
         }
-        throw Stop("Lobby tidak terdeteksi (cek kata kunci lobby di Setelan, jalankan Diagnosa)")
+        throw Stop("Lobby tidak terdeteksi (jalankan Diagnosa di tab Log dan kirim lognya)")
     }
 
     private fun lum(c: Int): Int {
@@ -743,13 +755,25 @@ object Engine {
         darkTaps++
         log("Lobby tampak gelap (kecerahan teks Event " + m + "), kemungkinan ada popup")
         tapXY(s.w * 0.856f, s.h * 0.09f, "tutup X (popup)")
+        popupSeen = true
         return true
     }
 
-    // Pantau lobby terus-menerus: popup ditutup begitu muncul. Selesai kalau sudah tenang selama
-    // "waktu tunggu lobby" detik sejak popup terakhir.
+    // Waktu tunggu lobby (milidetik) HANYA dipakai kalau lobby langsung muncul setelah loading tanpa popup apa pun.
+    // Kalau popup (misalnya Bonus Login 9 Hari) sudah muncul dan ditutup sebelum lobby, tidak menunggu lagi:
+    // cukup tutup popup yang masih terlihat, lalu lanjut.
     private fun settleLobby() {
-        val calm = (Prefs.lobbyWait * 1000L).coerceAtLeast(800L)
+        if (popupSeen) {
+            log("Popup sudah muncul sebelum lobby, waktu tunggu lobby dilewati")
+            var n = 0
+            while (n < 6) {
+                val s = cap()
+                if (popups(s) || darkPopupX(s)) n++ else break
+            }
+            return
+        }
+        val calm = Prefs.lobbyWait.toLong().coerceIn(0L, 30_000L)
+        log("Lobby langsung muncul tanpa popup, menunggu " + calm + " ms untuk popup baru")
         val t0 = now()
         var last = now()
         while (now() - last < calm && now() - t0 < 30_000L) {
@@ -876,34 +900,71 @@ object Engine {
     // (3) sesudah itu geseran pelan sudah cukup sampai baris terakhir.
     // Gesekan KERAS meniru auto clicker yang terbukti berhasil memuat baris baru di game ini:
     // satu garis lurus di x 77%, dari y 53% ke y 8% layar, 200 ms, tanpa tahan.
-    // Temuan dari HP lain (Realme 12 Plus): gesekan 66% ke 8% (200 ms) memuat baris baru; 53% ke 8% dan
-    // 66% ke 18% (lebih pendek) tidak. Di iQOO 11 perlu lebih kuat lagi. Jadi gesekan keras dibuat BERTINGKAT:
-    // dicoba dari yang paling ringan, lalu makin panjang dan makin cepat. Tingkat yang berhasil diingat.
+    // Hasil Diagnosa: kecepatan gesekan yang menentukan.
+    //  - iQOO 11: berhasil di 100-120 ms (66% ke 8% atau 70% ke 2%); gagal di 150-200 ms dan di 70 ms.
+    //  - Realme 12 Plus: berhasil di 200 ms (66% ke 8%).
+    // Jadi gesekan keras dibuat BERTINGKAT dan tingkat yang berhasil diingat (disimpan di Prefs):
+    // tingkat 1 dan 2 untuk HP yang butuh cepat, tingkat 3 untuk HP yang cukup 200 ms, tingkat 4 dan 5 cadangan.
     private val STYLES = listOf(
         Sty(300L, 3.0f, "gesek pelan 3 baris", 0.77f),
-        Sty(200L, 0f, "gesek keras tingkat 1 (66% ke 8%, 200ms)", 0.77f, 0L, true, 0.66f, 0.08f),
+        Sty(120L, 0f, "gesek keras tingkat 1 (66% ke 8%, 120ms)", 0.77f, 0L, true, 0.66f, 0.08f),
         Sty(280L, 3.0f, "gesek pelan 3 baris (ulang)", 0.76f),
-        Sty(150L, 0f, "gesek keras tingkat 2 (70% ke 2%, 150ms)", 0.77f, 0L, true, 0.70f, 0.02f),
+        Sty(100L, 0f, "gesek keras tingkat 2 (70% ke 2%, 100ms)", 0.77f, 0L, true, 0.70f, 0.02f),
         Sty(260L, 3.0f, "gesek pelan tengah", 0.60f),
-        Sty(100L, 0f, "gesek keras tingkat 3 (70% ke 2%, 100ms)", 0.77f, 0L, true, 0.70f, 0.02f),
-        Sty(70L, 0f, "gesek keras tingkat 4 (72% ke 1%, 70ms)", 0.77f, 0L, true, 0.72f, 0.01f)
+        Sty(200L, 0f, "gesek keras tingkat 3 (66% ke 8%, 200ms)", 0.77f, 0L, true, 0.66f, 0.08f),
+        Sty(150L, 0f, "gesek keras tingkat 4 (70% ke 2%, 150ms)", 0.77f, 0L, true, 0.70f, 0.02f),
+        Sty(90L, 0f, "gesek keras tingkat 5 (70% ke 2%, 90ms)", 0.77f, 0L, true, 0.70f, 0.02f)
     )
-    private val hardIdxs = listOf(1, 3, 5, 6)
-    private var hardLevel = 0
+    private val hardIdxs = listOf(1, 3, 5, 6, 7)
+    private var hardLevel: Int
+        get() = Prefs.hardLevel.coerceIn(0, hardIdxs.size - 1)
+        set(v) {
+            Prefs.hardLevel = v
+        }
 
     // true setelah daftar mentok (bergerak kurang dari 1,2 baris): geseran berikutnya langsung keras
     private var hardNext = false
 
+    // Gaya geser dari pengaturan manual (Pengaturan > Geser daftar server > Manual).
+    // Indeks sama dengan STYLES: 0, 2, 4 = pelan, selain itu = gesekan keras manual.
+    private fun manualStyles(): List<Sty> {
+        val xf = Prefs.swipeX / 100f
+        val slow = Prefs.swipeSlowMs.toLong()
+        val y0 = Prefs.swipeStart / 100f
+        val y1 = minOf(Prefs.swipeEnd / 100f, y0 - 0.1f)
+        val hardSt = Sty(
+            Prefs.swipeHardMs.toLong(), 0f,
+            "gesek keras manual (" + Prefs.swipeStart + "% ke " + Prefs.swipeEnd + "%, " + Prefs.swipeHardMs + "ms)",
+            xf, 0L, true, y0, y1
+        )
+        return listOf(
+            Sty(slow, 3.0f, "gesek pelan 3 baris", xf),
+            hardSt,
+            Sty(slow, 3.0f, "gesek pelan 3 baris (ulang)", xf),
+            hardSt,
+            Sty(slow, 3.0f, "gesek pelan tengah", 0.60f),
+            hardSt, hardSt, hardSt
+        )
+    }
+
+    // Ingat tingkat gesekan keras yang berhasil (hanya di mode otomatis)
+    private fun rememberHard(idx: Int) {
+        if (Prefs.swipeAuto) hardLevel = hardIdxs.indexOf(idx).coerceAtLeast(0)
+    }
+
     // Geser daftar satu langkah dan BUKTIKAN daftarnya bergerak (posisi baris yang sama bergeser).
     // moved=false setelah semua gaya geser dicoba = benar-benar ujung daftar.
-    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 9): Step {
+    private fun scrollStep(s: Scr, forward: Boolean, tag: String, maxTry: Int = 11): Step {
         val before = serverNums(s)
         val rh = rowH(s)
         var cur = s
         var lost = false
+        val auto = Prefs.swipeAuto
+        val styles = if (auto) STYLES else manualStyles()
+        val hIdx = if (auto) hardIdxs else listOf(1)
         val hardSeq = ArrayList<Int>()
-        for (k in 0 until hardIdxs.size) {
-            hardSeq.add(hardIdxs[(hardLevel + k) % hardIdxs.size])
+        for (k in 0 until hIdx.size) {
+            hardSeq.add(hIdx[((if (auto) hardLevel else 0) + k) % hIdx.size])
             hardSeq.add(2)
         }
         val seq: List<Int> = if (!forward) listOf(0, 2, 4)
@@ -911,7 +972,7 @@ object Engine {
         else listOf(0) + hardSeq
         for (attempt in 0 until minOf(maxTry, seq.size)) {
             val idx = seq[attempt]
-            val st = STYLES[idx]
+            val st = styles[idx]
             val fixedY = st.y0f >= 0f && forward
             val x0 = s.w * st.xf
             val x1 = if (fixedY) x0 else s.w * (st.xf + (if (st.hard) -0.02f else 0.02f))
@@ -956,8 +1017,8 @@ object Engine {
                         continue
                     }
                     hardNext = false
-                    hardLevel = hardIdxs.indexOf(idx).coerceAtLeast(0)
-                    log("Geseran " + scrollNo + " (" + tag + "): sinkron lagi, baris baru sudah dimuat (tingkat " + (hardLevel + 1) + "); lanjut geseran pelan")
+                    rememberHard(idx)
+                    log("Geseran " + scrollNo + " (" + tag + "): sinkron lagi, baris baru sudah dimuat" + (if (Prefs.swipeAuto) " (tingkat " + (hardLevel + 1) + ")" else " (manual)") + "; lanjut geseran pelan")
                     continue
                 }
                 log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + " terlalu jauh, baris mungkin terlewat. Geser balik")
@@ -987,7 +1048,7 @@ object Engine {
             }
             if (shift >= rh * 0.4f || grew) {
                 styleIdx = idx
-                if (st.hard) hardLevel = hardIdxs.indexOf(idx).coerceAtLeast(0)
+                if (st.hard) rememberHard(idx)
                 hardNext = (!st.hard) && shift < rh * 1.2f
                 log("Geseran " + scrollNo + " (" + tag + "): gaya " + st.name + ", terlihat " + rangeText(after) + ", bergerak " + String.format("%.1f", shift / rh) + " baris" + (if (hardNext) " (mentok, berikutnya gesekan keras)" else ""))
                 return Step(cur, true, false)
@@ -1162,7 +1223,7 @@ object Engine {
             log("Setelah mengetuk ikon profil, layar BUKAN menu Profil/Akun. Titik ketuk: " +
                 px.toInt() + "," + py.toInt() + " px dari layar " + s.w + "x" + s.h + ". Teks terbaca: " + s.all.take(160))
             if (avatarFails >= 2) {
-                throw Stop("Ikon profil tidak membuka menu Profil/Akun. Jalankan Diagnosa di lobby, lalu ubah angka X/Y ikon profil di tab Setelan.")
+                throw Stop("Ikon profil tidak membuka menu Profil/Akun. Jalankan Diagnosa di lobby dan kirim lognya.")
             }
         }
         throw Stop("Daftar server tidak terbuka (jalankan Diagnosa di menu profil)")
@@ -1752,7 +1813,7 @@ object Engine {
             }
             return
         }
-        if (Prefs.closeGame) closeApp() else svc?.home()
+        closeApp()
         if (mode == 1) {
             sleepS(0.8)
             log("Setelah selesai: kembali ke VG Klaim")
@@ -2037,21 +2098,22 @@ object Engine {
     }
 
     // Diagnosa geser v3: titik transparan aktif (supaya baca cepat), tiap uji dimulai dari posisi atas
-    private fun diagScroll(s0: Scr) {
+    private fun diagScroll(s0: Scr, single: Boolean = false) {
         val svc = ClaimService.inst
         svc?.dot(if (Prefs.dotStyle > 0) Prefs.dotStyle else 4)
         try {
             sleepS(1.0)
-            diagScrollRun(s0)
+            diagScrollRun(s0, single)
         } finally {
             svc?.dot(0)
         }
     }
 
-    private fun diagScrollRun(s0: Scr) {
+    private fun diagScrollRun(s0: Scr, single: Boolean = false) {
         log("DIAGNOSA GESER v3: layar " + s0.w + "x" + s0.h + ", " + s0.lines.size + " baris teks")
         if (!isServerList(s0)) {
             log("DIAGNOSA GESER: ini bukan Daftar Karakter (teks: " + s0.all.take(100) + "). Buka Daftar Karakter lalu ulangi.")
+            if (single) ClaimService.inst?.banner("Buka Daftar Karakter dulu, lalu ulangi uji", 8000L, false)
             return
         }
         val first = serverNums(s0)
@@ -2088,7 +2150,14 @@ object Engine {
         val dotOn = if (Prefs.dotStyle > 0) Prefs.dotStyle else 5
         // Temuan HP lain (Realme): 66% ke 8% (200 ms) memuat baris baru, yang lebih pendek tidak.
         // iQOO 11 perlu lebih kuat. Sapuan kekuatan: makin panjang dan makin cepat.
-        val tests = listOf(
+        val manualTest = Var(
+            "Uji manual " + Prefs.swipeStart + "% ke " + Prefs.swipeEnd + "%, " + Prefs.swipeHardMs + "ms, x " + Prefs.swipeX + "%", null
+        ) {
+            val y0 = Prefs.swipeStart / 100f
+            val y1 = minOf(Prefs.swipeEnd / 100f, y0 - 0.1f)
+            sw(Prefs.swipeX / 100f, y0, y1, Prefs.swipeHardMs.toLong())
+        }
+        val tests = if (single) listOf(manualTest) else listOf(
             Var("S1 66% ke 8%, 200ms (berhasil di HP lain)", null) { sw(0.77f, 0.66f, 0.08f, 200) },
             Var("S2 66% ke 8%, 120ms (lebih cepat)", null) { sw(0.77f, 0.66f, 0.08f, 120) },
             Var("S3 70% ke 2%, 200ms (lebih panjang)", null) { sw(0.77f, 0.70f, 0.02f, 200) },
@@ -2130,6 +2199,10 @@ object Engine {
         log("DIAGNOSA GESER: RINGKASAN")
         for (h2 in hasil) log("  " + h2)
         log("DIAGNOSA GESER: selesai")
+        if (single) {
+            val ok = hasil.isNotEmpty() && hasil[0].contains("MEMUAT BARIS BARU")
+            ClaimService.inst?.banner(if (ok) "Gesekan ini MEMUAT baris baru" else "Gesekan ini TIDAK memuat baris baru", 10000L, false)
+        }
     }
 
     private fun diagExtra(ctx: Context, s: Scr) {
@@ -2151,7 +2224,7 @@ object Engine {
         log("DIAGNOSA: Role (ID akun) dari strip kanan atas: " + (rid ?: "tidak terbaca (normal kalau bukan layar Memuat Game)"))
     }
 
-    fun diagnose(ctx: Context) {
+    fun diagnose(ctx: Context, onlyManual: Boolean = false) {
         Prefs.init(ctx)
         if (running) {
             log("DIAGNOSA: hentikan klaim dulu")
@@ -2167,12 +2240,12 @@ object Engine {
         lastActive = now()
         Thread {
             try {
-                log("DIAGNOSA (" + (if (Prefs.diagMode == 1) "geser daftar" else "umum/OCR") + "): mulai 15 detik lagi. Pindah ke game dan buka layar yang mau diukur, lalu jangan sentuh layar.")
+                log("DIAGNOSA (" + (if (onlyManual) "uji gesekan manual" else if (Prefs.diagMode == 1) "geser daftar" else "umum/OCR") + "): mulai 15 detik lagi. Pindah ke game dan buka layar yang mau diukur, lalu jangan sentuh layar.")
                 ClaimService.inst?.banner("Diagnosa mulai: pindah ke game, jangan sentuh layar (15 dtk)", 12000L, false)
                 sleepS(15.0)
                 val s = cap()
-                if (Prefs.diagMode == 1) {
-                    diagScroll(s)
+                if (onlyManual || Prefs.diagMode == 1) {
+                    diagScroll(s, onlyManual)
                 } else {
                 log("DIAGNOSA: layar " + s.w + "x" + s.h + ", " + s.lines.size + " baris teks")
                 for (l in s.lines) {
