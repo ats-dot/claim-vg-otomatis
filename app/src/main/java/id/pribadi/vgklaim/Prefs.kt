@@ -15,6 +15,15 @@ object Prefs {
 
     private fun s(): SharedPreferences = sp ?: throw IllegalStateException("Prefs belum init")
 
+    // Rentang nomor server yang dianggap server. Nomor di luar rentang diabaikan.
+    var serverMin: Int
+        get() = s().getInt("server_min", 57092)
+        set(v) { s().edit().putInt("server_min", v.coerceIn(1, 999999)).apply() }
+
+    var serverMax: Int
+        get() = s().getInt("server_max", 57115)
+        set(v) { s().edit().putInt("server_max", v.coerceIn(1, 999999)).apply() }
+
     var serverCount: Int
         get() = s().getInt("count", 20)
         set(v) { s().edit().putInt("count", v).apply() }
