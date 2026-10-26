@@ -80,12 +80,38 @@ object Prefs {
         get() = s().getInt("test_count", 20)
         set(v) { s().edit().putInt("test_count", v.coerceIn(2, 300)).apply() }
 
+    // Geser pelan (menggeser daftar maju) dan geser balik (menggeser daftar mundur), semua dalam persen tinggi layar
+    var swipeSlowStart: Int
+        get() = s().getInt("swipe_slow_start", 66)
+        set(v) { s().edit().putInt("swipe_slow_start", v.coerceIn(0, 100)).apply() }
+
+    var swipeSlowEnd: Int
+        get() = s().getInt("swipe_slow_end", 42)
+        set(v) { s().edit().putInt("swipe_slow_end", v.coerceIn(0, 100)).apply() }
+
+    var swipeBackStart: Int
+        get() = s().getInt("swipe_back_start", 45)
+        set(v) { s().edit().putInt("swipe_back_start", v.coerceIn(0, 100)).apply() }
+
+    var swipeBackEnd: Int
+        get() = s().getInt("swipe_back_end", 68)
+        set(v) { s().edit().putInt("swipe_back_end", v.coerceIn(0, 100)).apply() }
+
+    var swipeBackMs: Int
+        get() = s().getInt("swipe_back_ms", 300)
+        set(v) { s().edit().putInt("swipe_back_ms", v.coerceIn(100, 1000)).apply() }
+
     fun resetSwipe() {
         swipeHardMs = 120
         swipeStart = 66
         swipeEnd = 8
         swipeX = 77
         swipeSlowMs = 300
+        swipeSlowStart = 66
+        swipeSlowEnd = 42
+        swipeBackStart = 45
+        swipeBackEnd = 68
+        swipeBackMs = 300
     }
 
     var dotAuto: Boolean
