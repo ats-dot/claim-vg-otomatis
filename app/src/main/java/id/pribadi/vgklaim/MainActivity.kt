@@ -2,38 +2,59 @@ package id.pribadi.vgklaim
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.widget.Button
 import android.widget.EditText
-import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+
+// Tema tunggal: biru malam dan emas
+private val C_BG = Color.parseColor("#0A0F1E")
+private val C_FG = Color.parseColor("#E9ECF5")
+private val C_MUT = Color.parseColor("#9AA6C4")
+private val C_DIV = Color.parseColor("#1B2744")
+private val C_POP = Color.parseColor("#111A30")
+private val C_LINE = Color.parseColor("#2C3A5E")
+private val C_ACC = Color.parseColor("#E2C275")
+private val C_ONACC = Color.parseColor("#1A1405")
+private val C_SURF = Color.parseColor("#111A30")
 
 class MainActivity : Activity() {
 
     private val h = Handler(Looper.getMainLooper())
-    private lateinit var content: FrameLayout
     private var tab = 0
+    private var help = false
     private var tvStatus: TextView? = null
+    private var tvProg: TextView? = null
     private var tvLog: TextView? = null
-    private var tvGame: TextView? = null
     private var tvSvc: TextView? = null
+    private var barFill: View? = null
+    private var barRest: View? = null
+    private var lastFrac = -1f
     private var lastLog = ""
 
     private val ticker = object : Runnable {
@@ -49,40 +70,13 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         Prefs.init(applicationContext)
         Matcher.reload(applicationContext)
-        window.statusBarColor = Color.BLACK
-        window.navigationBarColor = Color.BLACK
-
-        val root = LinearLayout(this)
-        root.orientation = LinearLayout.VERTICAL
-        root.setBackgroundColor(Color.BLACK)
-        root.setPadding(0, dp(28), 0, 0)
-
-        content = FrameLayout(this)
-        root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-
-        val nav = LinearLayout(this)
-        nav.orientation = LinearLayout.HORIZONTAL
-        nav.setPadding(dp(8), dp(6), dp(8), dp(8))
-        val names = listOf("Beranda", "Log", "Setelan", "Templat")
-        for (i in names.indices) {
-            val b = Button(this)
-            b.text = names[i]
-            b.isAllCaps = false
-            style(b, false)
-            b.setOnClickListener { show(i) }
-            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            lp.setMargins(dp(3), 0, dp(3), 0)
-            nav.addView(b, lp)
-        }
-        root.addView(nav)
-        setContentView(root)
-        show(0)
+        render()
     }
 
     override fun onResume() {
         super.onResume()
         h.post(ticker)
-        if (tab == 3) show(3)
+        if (tab == 2 && !help) render()
     }
 
     override fun onPause() {
@@ -90,29 +84,50 @@ class MainActivity : Activity() {
         h.removeCallbacks(ticker)
     }
 
-    private fun style(b: Button, selected: Boolean) {
-        val g = GradientDrawable()
-        g.setColor(if (selected) Color.WHITE else Color.BLACK)
-        g.setStroke(dp(1), Color.WHITE)
-        g.cornerRadius = dp(14).toFloat()
-        b.background = g
-        b.setTextColor(if (selected) Color.BLACK else Color.WHITE)
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (help) {
+            help = false
+            render()
+        } else {
+            super.onBackPressed()
+        }
     }
 
-    private fun btn(t: String, onClick: () -> Unit): Button {
+    // ---------- bahan tampilan ----------
+
+    private fun shape(fill: Int, stroke: Int, radiusDp: Int, strokeDp: Float = 1.5f): GradientDrawable {
+        val g = GradientDrawable()
+        g.setColor(fill)
+        if (strokeDp > 0f) g.setStroke(maxOf(1, (strokeDp * resources.displayMetrics.density).toInt()), stroke)
+        g.cornerRadius = dp(radiusDp).toFloat()
+        return g
+    }
+
+    private fun styleBtn(b: Button, primary: Boolean) {
+        b.background = shape(if (primary) C_ACC else Color.TRANSPARENT, if (primary) C_ACC else C_LINE, 30)
+        b.setTextColor(if (primary) C_ONACC else C_FG)
+    }
+
+    private fun btn(t: String, primary: Boolean = false, onClick: () -> Unit): Button {
         val b = Button(this)
         b.text = t
         b.isAllCaps = false
-        style(b, false)
+        b.textSize = 15f
+        b.setTypeface(null, Typeface.BOLD)
+        b.stateListAnimator = null
+        b.minHeight = 0
+        b.minimumHeight = 0
+        styleBtn(b, primary)
         b.setOnClickListener { onClick() }
         return b
     }
 
-    private fun tv(t: String, size: Float = 14f, bold: Boolean = false, gray: Boolean = false): TextView {
+    private fun tv(t: String, size: Float = 15f, bold: Boolean = false, color: Int = C_FG): TextView {
         val v = TextView(this)
         v.text = t
         v.textSize = size
-        v.setTextColor(if (gray) Color.parseColor("#9A9A9A") else Color.WHITE)
+        v.setTextColor(color)
         if (bold) v.setTypeface(null, Typeface.BOLD)
         return v
     }
@@ -120,35 +135,127 @@ class MainActivity : Activity() {
     private fun card(vararg views: View): LinearLayout {
         val c = LinearLayout(this)
         c.orientation = LinearLayout.VERTICAL
-        c.setPadding(dp(14), dp(12), dp(14), dp(12))
-        val g = GradientDrawable()
-        g.setColor(Color.BLACK)
-        g.setStroke(dp(1), Color.WHITE)
-        g.cornerRadius = dp(16).toFloat()
-        c.background = g
+        c.setPadding(dp(18), dp(6), dp(18), dp(6))
+        c.background = shape(C_SURF, C_LINE, 24)
         for (v in views) c.addView(v)
         return c
     }
 
-    private fun edit(hint: String, value: String, numeric: Boolean): EditText {
+    private fun divider(): View {
+        val v = View(this)
+        v.setBackgroundColor(C_DIV)
+        v.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, maxOf(1, dp(1)))
+        return v
+    }
+
+    // Satu baris: label di kiri, kontrol di kanan
+    private fun row(label: String, right: View): LinearLayout {
+        val r = LinearLayout(this)
+        r.orientation = LinearLayout.HORIZONTAL
+        r.gravity = Gravity.CENTER_VERTICAL
+        r.minimumHeight = dp(52)
+        r.addView(tv(label, 16f), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val rp = (right.layoutParams as? LinearLayout.LayoutParams)
+            ?: LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        rp.leftMargin = dp(12)
+        r.addView(right, rp)
+        return r
+    }
+
+    private fun linkRow(label: String, value: TextView, onClick: () -> Unit): View {
+        val r = row(label, value)
+        r.setOnClickListener { onClick() }
+        return r
+    }
+
+    private fun switchRow(label: String, get: () -> Boolean, set: (Boolean) -> Unit): View {
+        val sw = Switch(this)
+        sw.isChecked = get()
+        val st = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+        sw.thumbTintList = ColorStateList(st, intArrayOf(C_ONACC, C_MUT))
+        sw.trackTintList = ColorStateList(st, intArrayOf(C_ACC, C_LINE))
+        sw.setOnCheckedChangeListener { _, c -> set(c) }
+        return row(label, sw)
+    }
+
+    private fun numBox(value: String, onChange: ((String) -> Unit)? = null): EditText {
         val e = EditText(this)
-        e.setTextColor(Color.WHITE)
-        e.setHintTextColor(Color.GRAY)
-        e.hint = hint
         e.setText(value)
+        e.setTextColor(C_FG)
+        e.setHintTextColor(C_MUT)
         e.gravity = Gravity.CENTER
-        if (numeric) e.inputType = InputType.TYPE_CLASS_NUMBER
+        e.textSize = 17f
+        e.inputType = InputType.TYPE_CLASS_NUMBER
+        e.setSingleLine(true)
+        e.background = shape(Color.TRANSPARENT, C_LINE, 22)
+        e.setPadding(dp(8), 0, dp(8), 0)
+        e.layoutParams = LinearLayout.LayoutParams(dp(96), dp(44))
+        if (onChange != null) {
+            e.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+                override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    onChange(s?.toString() ?: "")
+                }
+            })
+        }
         return e
     }
 
-    private fun lp(top: Int = 8): LinearLayout.LayoutParams {
-        val p = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        p.setMargins(0, dp(top), 0, 0)
+    private fun styleSeg(b: Button, on: Boolean) {
+        b.background = shape(if (on) C_ACC else Color.TRANSPARENT, if (on) C_ACC else C_LINE, 22)
+        b.setTextColor(if (on) C_ONACC else C_FG)
+    }
+
+    private fun seg(options: List<String>, selected: Int, onPick: (Int) -> Unit): LinearLayout {
+        val r = LinearLayout(this)
+        r.orientation = LinearLayout.HORIZONTAL
+        val bs = ArrayList<Button>()
+        for (k in options.indices) {
+            val b = Button(this)
+            b.isAllCaps = false
+            b.text = options[k]
+            b.textSize = 14f
+            b.setTypeface(null, Typeface.BOLD)
+            b.stateListAnimator = null
+            b.minHeight = 0
+            b.minimumHeight = 0
+            b.setPadding(dp(6), 0, dp(6), 0)
+            styleSeg(b, k == selected)
+            b.setOnClickListener {
+                for (j in bs.indices) styleSeg(bs[j], j == k)
+                onPick(k)
+            }
+            bs.add(b)
+            val p = LinearLayout.LayoutParams(0, dp(44), 1f)
+            p.setMargins(dp(3), 0, dp(3), 0)
+            r.addView(b, p)
+        }
+        return r
+    }
+
+    private fun lpw(hDp: Int, topDp: Int): LinearLayout.LayoutParams {
+        val p = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            if (hDp > 0) dp(hDp) else ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        p.setMargins(0, dp(topDp), 0, 0)
         return p
+    }
+
+    private fun section(title: String, body: View): View {
+        val c = LinearLayout(this)
+        c.orientation = LinearLayout.VERTICAL
+        val t = tv(title, 15f, true, C_MUT)
+        t.setPadding(dp(12), 0, 0, dp(8))
+        c.addView(t)
+        c.addView(body)
+        return c
     }
 
     private fun page(): Pair<ScrollView, LinearLayout> {
         val sv = ScrollView(this)
+        sv.isFillViewport = true
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(16), dp(8), dp(16), dp(16))
@@ -156,100 +263,154 @@ class MainActivity : Activity() {
         return Pair(sv, col)
     }
 
-    private fun toggle(label: String, get: () -> Boolean, set: (Boolean) -> Unit): Button {
-        val b = Button(this)
-        b.isAllCaps = false
-        fun render() {
-            b.text = label + ": " + (if (get()) "AKTIF" else "MATI")
-            style(b, get())
-        }
-        render()
-        b.setOnClickListener {
-            set(!get())
-            render()
-        }
-        return b
-    }
-
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
 
-    private fun pct(v: Float): String = String.format(java.util.Locale.US, "%.1f", v * 100f)
+    // ---------- kerangka: header, isi tab, navigasi ----------
 
-    private fun show(i: Int) {
-        tab = i
-        tvStatus = null
-        tvLog = null
-        tvGame = null
-        tvSvc = null
-        content.removeAllViews()
-        content.addView(
-            when (i) {
-                0 -> home()
-                1 -> logTab()
-                2 -> settings()
-                else -> templates()
+    private fun header(title: String, logo: Boolean, menu: Boolean, back: Boolean): View {
+        val hd = LinearLayout(this)
+        hd.orientation = LinearLayout.HORIZONTAL
+        hd.gravity = Gravity.CENTER_VERTICAL
+        hd.setPadding(dp(24), dp(8), dp(12), 0)
+        hd.minimumHeight = dp(64)
+        if (back) {
+            val b = TextView(this)
+            b.text = "\u2190"
+            b.textSize = 26f
+            b.setTextColor(C_FG)
+            b.gravity = Gravity.CENTER
+            b.setOnClickListener {
+                help = false
+                render()
             }
-        )
+            val bp = LinearLayout.LayoutParams(dp(48), dp(48))
+            bp.leftMargin = -dp(12)
+            hd.addView(b, bp)
+        }
+        if (logo) {
+            val iv = ImageView(this)
+            iv.setImageResource(R.drawable.ic_logo)
+            iv.setColorFilter(C_ACC)
+            val ip = LinearLayout.LayoutParams(dp(32), dp(32))
+            ip.rightMargin = dp(12)
+            hd.addView(iv, ip)
+        }
+        hd.addView(tv(title, 24f, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (menu) {
+            val m = TextView(this)
+            m.text = "\u22EE"
+            m.textSize = 28f
+            m.setTextColor(C_FG)
+            m.gravity = Gravity.CENTER
+            m.contentDescription = "Menu"
+            m.setOnClickListener { showMenu() }
+            hd.addView(m, LinearLayout.LayoutParams(dp(48), dp(48)))
+        }
+        return hd
+    }
+
+    private fun render() {
+        window.statusBarColor = C_BG
+        window.navigationBarColor = C_BG
+        tvStatus = null
+        tvProg = null
+        tvLog = null
+        tvSvc = null
+        barFill = null
+        barRest = null
+        lastFrac = -1f
+
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setBackgroundColor(C_BG)
+        root.setPadding(0, dp(28), 0, 0)
+
+        if (help) {
+            root.addView(header("Fungsi pengaturan", false, false, true))
+            root.addView(helpPage(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            setContentView(root)
+            return
+        }
+
+        val titles = listOf("VG Klaim", "Log", "Pengaturan")
+        root.addView(header(titles[tab], tab == 0, tab == 2, false))
+        val body: View = when (tab) {
+            0 -> home()
+            1 -> logTab()
+            else -> settings()
+        }
+        root.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val nav = LinearLayout(this)
+        nav.orientation = LinearLayout.HORIZONTAL
+        nav.setPadding(dp(16), dp(10), dp(16), dp(14))
+        val names = listOf("Beranda", "Log", "Pengaturan")
+        for (i in names.indices) {
+            val b = Button(this)
+            b.text = names[i]
+            b.isAllCaps = false
+            b.textSize = 13f
+            b.setTypeface(null, Typeface.BOLD)
+            b.stateListAnimator = null
+            b.minHeight = 0
+            b.minimumHeight = 0
+            val on = i == tab
+            b.background = shape(if (on) C_ACC else Color.TRANSPARENT, if (on) C_ACC else C_LINE, 24)
+            b.setTextColor(if (on) C_ONACC else C_FG)
+            b.setOnClickListener {
+                tab = i
+                render()
+            }
+            val lp = LinearLayout.LayoutParams(0, dp(48), 1f)
+            lp.setMargins(dp(4), 0, dp(4), 0)
+            nav.addView(b, lp)
+        }
+        root.addView(nav)
+        setContentView(root)
         tick()
     }
 
-    private fun gameLabel(): String {
-        val p = Prefs.pkg
-        if (p.isEmpty()) return "Otomatis (cari Mobile Legends)"
-        for ((pk, lb) in Engine.listApps(this, true)) if (pk == p) return lb + "  (" + pk + ")"
-        return p
-    }
+    // ---------- tab Beranda ----------
 
     private fun home(): View {
         val (sv, col) = page()
-        col.addView(tv("VG Klaim", 28f, true))
-        col.addView(tv("Klaim otomatis, tanpa internet", 13f, false, true))
 
-        val g = tv(gameLabel(), 16f, true)
-        tvGame = g
-        val gc = card(tv("Game", 12f, false, true), g, tv("Ketuk untuk memilih aplikasi lain", 12f, false, true))
-        gc.setOnClickListener { pickGame() }
-        col.addView(gc, lp(16))
-
-        val st = tv("", 15f)
+        val st = tv("", 22f, true, C_ACC)
         tvStatus = st
-        col.addView(card(tv("Status", 12f, false, true), st), lp())
+        val prog = tv("", 17f, false, C_FG)
+        tvProg = prog
 
-        val cnt = edit("kosong = hitung otomatis", if (Prefs.serverCount > 0) Prefs.serverCount.toString() else "", true)
-        val sc = card(
-            tv("Jumlah server (kosongkan = hitung otomatis)", 12f, false, true),
-            cnt
-        )
-        col.addView(sc, lp())
-        col.addView(toggle("Lewati server di atas posisi sekarang", { Prefs.skipAbove }, { Prefs.skipAbove = it }), lp(6))
-        col.addView(toggle("Tutup game otomatis setelah selesai", { Prefs.closeGame }, { Prefs.closeGame = it }), lp(6))
-        col.addView(toggle("Tampilkan semua aplikasi", { Prefs.showAll }, { Prefs.showAll = it }), lp(6))
-        col.addView(toggle("Titik melayang saat klaim (hasil Diagnosa)", { Prefs.dotAuto }, { Prefs.dotAuto = it }), lp(6))
+        val barBox = LinearLayout(this)
+        barBox.orientation = LinearLayout.HORIZONTAL
+        barBox.weightSum = 1f
+        barBox.background = shape(C_DIV, C_DIV, 6, 0f)
+        val fill = View(this)
+        fill.background = shape(C_ACC, C_ACC, 6, 0f)
+        val rest = View(this)
+        barFill = fill
+        barRest = rest
+        barBox.addView(fill, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0f))
+        barBox.addView(rest, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
 
-        val afterOpts = listOf("1. Kembali ke VG Klaim", "2. Ke Home", "3. Tetap di game")
-        val ar = LinearLayout(this)
-        ar.orientation = LinearLayout.VERTICAL
-        val abtns = ArrayList<Button>()
-        for (k in afterOpts.indices) {
-            val b = Button(this)
-            b.isAllCaps = false
-            b.text = afterOpts[k]
-            b.setOnClickListener {
-                Prefs.afterDone = k + 1
-                for (j in abtns.indices) style(abtns[j], j == k)
-            }
-            style(b, Prefs.afterDone == k + 1)
-            abtns.add(b)
-            ar.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        col.addView(
-            card(
-                tv("Setelah selesai (banner hasil klaim selalu tampil). Pilihan 1 dan 2 mengikuti saklar tutup game di atas.", 12f, false, true),
-                ar
-            ), lp(16)
-        )
+        val stBox = LinearLayout(this)
+        stBox.orientation = LinearLayout.VERTICAL
+        stBox.setPadding(0, dp(12), 0, dp(14))
+        stBox.addView(tv("Status", 14f, false, C_MUT))
+        stBox.addView(st, lpw(0, 2))
+        stBox.addView(divider(), lpw(1, 12))
+        stBox.addView(tv("Selesai", 14f, false, C_MUT), lpw(0, 12))
+        stBox.addView(prog, lpw(0, 2))
+        stBox.addView(barBox, lpw(10, 10))
+        col.addView(card(stBox), lpw(0, 4))
 
-        col.addView(btn("MULAI KLAIM") {
+        val cnt = numBox(if (Prefs.serverCount > 0) Prefs.serverCount.toString() else "")
+        cnt.hint = "Otomatis"
+        col.addView(card(row("Jumlah server", cnt)), lpw(0, 12))
+
+        val spacer = View(this)
+        col.addView(spacer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        col.addView(btn("MULAI KLAIM", true) {
             Prefs.serverCount = cnt.text.toString().trim().toIntOrNull() ?: 0
             if (android.os.Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -258,63 +419,20 @@ class MainActivity : Activity() {
             }
             val r = Engine.start(applicationContext)
             if (r != null) toast(r) else toast("Klaim dimulai")
-        }, lp(16))
-        col.addView(btn("BERHENTI") { Engine.stop() }, lp(6))
-
-        col.addView(toggle("Mode tanpa jeda", { Prefs.noDelay }, { Prefs.noDelay = it }), lp(16))
-        val sm = edit("ms", Prefs.stepMs.toString(), true)
-        col.addView(card(tv("Jeda antar langkah (milidetik, 0-3000). Dipakai hanya saat Mode tanpa jeda MATI. Tekan Simpan waktu di bawah.", 12f, false, true), sm), lp(6))
-
-        val dm = listOf("Umum / OCR", "Geser daftar")
-        val dr = LinearLayout(this)
-        dr.orientation = LinearLayout.HORIZONTAL
-        val dbtns = ArrayList<Button>()
-        for (k in dm.indices) {
-            val b = Button(this)
-            b.isAllCaps = false
-            b.text = dm[k]
-            b.setOnClickListener {
-                Prefs.diagMode = k
-                for (j2 in dbtns.indices) style(dbtns[j2], j2 == k)
-            }
-            style(b, Prefs.diagMode == k)
-            dbtns.add(b)
-            val p = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            p.setMargins(dp(3), 0, dp(3), 0)
-            dr.addView(b, p)
-        }
-        col.addView(card(tv("Jenis Diagnosa (tombol Diagnosa ada di tab Log)", 12f, false, true), dr), lp(16))
-
-        val lw = edit("detik", Prefs.lobbyWait.toString(), true)
-        col.addView(card(tv("Waktu tenang LOBBY (detik tanpa popup baru, sebelum buka Event)", 12f, false, true), lw), lp())
-        col.addView(btn("Simpan waktu") {
-            Prefs.lobbyWait = lw.text.toString().trim().toIntOrNull() ?: 3
-            Prefs.stepMs = sm.text.toString().trim().toIntOrNull() ?: 400
-            toast("Tersimpan")
-        }, lp(6))
+        }, lpw(60, 16))
+        col.addView(btn("BERHENTI") { Engine.stop() }, lpw(60, 10))
         return sv
     }
 
-    private fun pickGame() {
-        val apps = Engine.listApps(this, Prefs.showAll)
-        val labels = ArrayList<String>()
-        labels.add("Otomatis (cari Mobile Legends)")
-        for (a in apps) labels.add(a.second + "\n" + a.first)
-        AlertDialog.Builder(this)
-            .setTitle("Pilih game")
-            .setItems(labels.toTypedArray()) { _, which ->
-                Prefs.pkg = if (which == 0) "" else apps[which - 1].first
-                tvGame?.text = gameLabel()
-            }
-            .show()
-    }
+    // ---------- tab Log ----------
 
     private fun logTab(): View {
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(16), dp(8), dp(16), dp(8))
-        val row = LinearLayout(this)
-        row.orientation = LinearLayout.HORIZONTAL
+
+        val rowB = LinearLayout(this)
+        rowB.orientation = LinearLayout.HORIZONTAL
         val b1 = btn("Salin log") {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("log", AppLog.text()))
@@ -322,169 +440,282 @@ class MainActivity : Activity() {
         }
         val b2 = btn("Hapus log") {
             AppLog.clear()
+            lastLog = ""
             tick()
         }
-        val b3 = btn("Diagnosa") {
+        val b3 = btn("Diagnosa", true) {
             Engine.diagnose(applicationContext)
             toast("Pindah ke game dalam 15 detik, lalu diam")
         }
         for (b in listOf(b1, b2, b3)) {
-            val p = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            val p = LinearLayout.LayoutParams(0, dp(48), 1f)
             p.setMargins(dp(3), 0, dp(3), 0)
-            row.addView(b, p)
+            rowB.addView(b, p)
         }
-        col.addView(row)
-        val st = tv("", 14f, true)
+        col.addView(rowB)
+
+        val st = tv("", 13f, false, C_MUT)
         tvStatus = st
-        col.addView(st, lp(8))
-        val t = tv("", 11f)
+        col.addView(st, lpw(0, 10))
+
+        val t = tv("", 12f)
         t.typeface = Typeface.MONOSPACE
         t.setTextIsSelectable(true)
+        t.setPadding(dp(14), dp(12), dp(14), dp(12))
         tvLog = t
         val sv = ScrollView(this)
+        sv.background = shape(C_SURF, C_LINE, 24)
         sv.addView(t)
-        col.addView(sv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        col.addView(sv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).also { it.topMargin = dp(10) })
         return col
+    }
+
+    // ---------- tab Pengaturan ----------
+
+    private fun gameShort(): String {
+        val p = Prefs.pkg
+        if (p.isEmpty()) return "Otomatis"
+        for ((pk, lb) in Engine.listApps(this, true)) if (pk == p) return lb
+        return p
     }
 
     private fun settings(): View {
         val (sv, col) = page()
-        col.addView(tv("Setelan", 24f, true))
-        val svc = tv("", 13f, false, true)
+
+        // Izin
+        val svc = tv("", 15f, false, C_MUT)
         tvSvc = svc
-        col.addView(svc, lp())
-        col.addView(btn("1. Buka Pengaturan Aksesibilitas") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }, lp())
-        val bat = tv("", 12f, false, true)
+        val bat = tv("", 15f, false, C_MUT)
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-            bat.text = "Pengecualian baterai: " + (if (pm.isIgnoringBatteryOptimizations(packageName)) "SUDAH" else "BELUM")
+            val ok = pm.isIgnoringBatteryOptimizations(packageName)
+            bat.text = if (ok) "Tanpa batasan" else "Belum diatur"
+            if (ok) bat.setTextColor(C_ACC)
         } catch (e: Exception) {
-            bat.text = "Pengecualian baterai: tidak diketahui"
+            bat.text = "Tidak diketahui"
         }
-        col.addView(bat, lp(6))
-        col.addView(btn("2. Buka pengaturan baterai (pilih VG Klaim: tanpa batasan)") {
-            try {
-                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-            } catch (e: Exception) {
-                toast("Tidak bisa dibuka: " + e.javaClass.simpleName)
-            }
-        }, lp(6))
         col.addView(
-            tv("Di OriginOS cek juga: Setelan HP > Baterai > Penggunaan latar belakang > VG Klaim > izinkan / tanpa batasan.", 12f, false, true),
-            lp(6)
+            section(
+                "Izin",
+                card(
+                    linkRow("Aksesibilitas", svc) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                    divider(),
+                    linkRow("Baterai", bat) {
+                        try {
+                            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        } catch (e: Exception) {
+                            toast("Tidak bisa dibuka: " + e.javaClass.simpleName)
+                        }
+                    }
+                )
+            ), lpw(0, 4)
         )
-        col.addView(btn("Ulangi dari awal (hapus catatan server selesai hari ini)") {
-            Prefs.resetDone()
-            toast("Catatan dihapus")
-        }, lp(6))
 
-        val keys = edit("kata kunci lobby", Prefs.lobbyKeys, false)
-        val min = edit("minimal cocok", Prefs.lobbyMin.toString(), true)
-        col.addView(
-            card(
-                tv("Kata kunci layar LOBBY (pisah koma, huruf kecil)", 12f, false, true), keys,
-                tv("Minimal berapa kata harus terbaca", 12f, false, true), min
-            ), lp(16)
-        )
-        col.addView(btn("Simpan kata kunci") {
-            Prefs.lobbyKeys = keys.text.toString()
-            Prefs.lobbyMin = min.text.toString().trim().toIntOrNull() ?: 3
-            toast("Tersimpan")
-        }, lp(6))
+        // Game
+        val gv = tv(gameShort(), 15f, false, C_MUT)
+        col.addView(section("Game", card(linkRow("Aplikasi game", gv) { pickGame(gv) })), lpw(0, 16))
 
-        val ax = edit("X (persen)", pct(Prefs.avatarX), false)
-        val ay = edit("Y (persen)", pct(Prefs.avatarY), false)
-        ax.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-        ay.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-        col.addView(
-            card(
-                tv("Posisi ketuk IKON PROFIL di lobby (persen layar, angka 0-100)", 12f, false, true),
-                tv("X = jarak dari kiri", 12f, false, true), ax,
-                tv("Y = jarak dari atas", 12f, false, true), ay
-            ), lp(16)
-        )
-        col.addView(btn("Simpan posisi ikon profil") {
-            val x = ax.text.toString().trim().replace(',', '.').toFloatOrNull()
-            val y = ay.text.toString().trim().replace(',', '.').toFloatOrNull()
-            if (x == null || y == null || x <= 0f || x >= 100f || y <= 0f || y >= 100f) {
-                toast("Isi angka antara 0 dan 100")
-                return@btn
-            }
-            Prefs.avatarX = x / 100f
-            Prefs.avatarY = y / 100f
+        // Klaim
+        val sm = numBox(Prefs.stepMs.toString())
+        val lw = numBox(Prefs.lobbyWait.toString())
+        val afterLabel = tv("Setelah selesai", 16f)
+        afterLabel.setPadding(0, dp(14), 0, dp(8))
+        val afterSeg = seg(listOf("VG Klaim", "Home", "Tetap di game"), Prefs.afterDone - 1) { k -> Prefs.afterDone = k + 1 }
+        val afterBox = LinearLayout(this)
+        afterBox.orientation = LinearLayout.VERTICAL
+        afterBox.setPadding(0, 0, 0, dp(12))
+        afterBox.addView(afterLabel)
+        afterBox.addView(afterSeg)
+        val saveBox = LinearLayout(this)
+        saveBox.orientation = LinearLayout.VERTICAL
+        saveBox.setPadding(0, dp(12), 0, dp(12))
+        saveBox.addView(btn("Simpan") {
+            Prefs.stepMs = sm.text.toString().trim().toIntOrNull() ?: 400
+            Prefs.lobbyWait = lw.text.toString().trim().toIntOrNull() ?: 3000
             toast("Tersimpan")
-        }, lp(6))
+        }, lpw(48, 0))
+        col.addView(
+            section(
+                "Klaim",
+                card(
+                    afterBox, divider(),
+                    switchRow("Lewati server di atas posisi sekarang", { Prefs.skipAbove }, { Prefs.skipAbove = it }), divider(),
+                    switchRow("Titik melayang saat klaim", { Prefs.dotAuto }, { Prefs.dotAuto = it }), divider(),
+                    row("Jeda antar langkah (ms)", sm), divider(),
+                    row("Waktu tunggu lobby (ms)", lw), divider(),
+                    saveBox
+                )
+            ), lpw(0, 16)
+        )
 
-        val os = edit("Skala baca layar (%)", Prefs.ocrScale.toString(), true)
-        col.addView(
-            card(
-                tv("Kecepatan baca layar (30-100). Makin kecil makin cepat, tapi tulisan kecil bisa tidak terbaca. 100 = penuh. Awal: 60.", 12f, false, true),
-                os
-            ), lp(16)
-        )
-        col.addView(btn("Simpan skala baca layar") {
-            val v = os.text.toString().trim().toIntOrNull()
-            if (v == null || v < 30 || v > 100) {
-                toast("Isi angka 30 sampai 100")
-                return@btn
+        // Geser daftar server
+        val modeLabel = tv("Mode geser daftar", 16f)
+        modeLabel.setPadding(0, dp(14), 0, dp(8))
+        val modeSeg = seg(listOf("Otomatis", "Manual"), if (Prefs.swipeAuto) 0 else 1) { k ->
+            Prefs.swipeAuto = (k == 0)
+            render()
+        }
+        val modeBox = LinearLayout(this)
+        modeBox.orientation = LinearLayout.VERTICAL
+        modeBox.setPadding(0, 0, 0, dp(12))
+        modeBox.addView(modeLabel)
+        modeBox.addView(modeSeg)
+        val gviews = ArrayList<View>()
+        gviews.add(modeBox)
+        if (!Prefs.swipeAuto) {
+            fun field(label: String, value: Int, set: (Int) -> Unit) {
+                gviews.add(divider())
+                gviews.add(row(label, numBox(value.toString()) { s ->
+                    val n = s.trim().toIntOrNull()
+                    if (n != null) set(n)
+                }))
             }
-            Prefs.ocrScale = v
-            toast("Tersimpan")
-        }, lp(6))
+            field("Gesekan keras (ms)", Prefs.swipeHardMs) { Prefs.swipeHardMs = it }
+            field("Titik awal (% tinggi)", Prefs.swipeStart) { Prefs.swipeStart = it }
+            field("Titik akhir (% tinggi)", Prefs.swipeEnd) { Prefs.swipeEnd = it }
+            field("Posisi X (% lebar)", Prefs.swipeX) { Prefs.swipeX = it }
+            field("Gesekan pelan (ms)", Prefs.swipeSlowMs) { Prefs.swipeSlowMs = it }
+            val bb = LinearLayout(this)
+            bb.orientation = LinearLayout.HORIZONTAL
+            bb.setPadding(0, dp(12), 0, dp(12))
+            val t1 = btn("Uji gesekan", true) {
+                Engine.diagnose(applicationContext, true)
+                toast("Buka Daftar Karakter, pindah ke game dalam 15 detik, lalu diam")
+            }
+            val t2 = btn("Bawaan") {
+                Prefs.resetSwipe()
+                render()
+            }
+            val p1 = LinearLayout.LayoutParams(0, dp(48), 1f)
+            p1.setMargins(0, 0, dp(4), 0)
+            val p2 = LinearLayout.LayoutParams(0, dp(48), 1f)
+            p2.setMargins(dp(4), 0, 0, 0)
+            bb.addView(t1, p1)
+            bb.addView(t2, p2)
+            gviews.add(divider())
+            gviews.add(bb)
+        }
+        col.addView(section("Geser daftar server", card(*gviews.toTypedArray())), lpw(0, 16))
+
+        // Diagnosa
+        val dBox = LinearLayout(this)
+        dBox.orientation = LinearLayout.VERTICAL
+        dBox.setPadding(0, dp(12), 0, dp(12))
+        dBox.addView(seg(listOf("Umum / OCR", "Geser daftar"), Prefs.diagMode) { k -> Prefs.diagMode = k })
+        col.addView(section("Jenis diagnosa", card(dBox)), lpw(0, 16))
+
+        // Data
         col.addView(
-            tv(
-                "Aplikasi ini tidak memiliki izin internet. Layanan Aksesibilitas hanya dipakai untuk screenshot dan ketukan " +
-                    "saat klaim berjalan. Matikan layanan ini setelah selesai dan jangan buka aplikasi bank saat aktif. " +
-                    "Memakai bot melanggar aturan game dan bisa membuat akun dikenai sanksi.",
-                12f, false, true
-            ), lp(16)
+            section("Data hari ini", btn("Ulangi dari awal") {
+                Prefs.resetDone()
+                toast("Catatan dihapus")
+            }.also { it.layoutParams = lpw(52, 0) }), lpw(0, 16)
         )
         return sv
     }
 
-    private fun templates(): View {
+    private fun pickGame(label: TextView) {
+        var apps = Engine.listApps(this, false)
+        if (apps.isEmpty()) apps = Engine.listApps(this, true)
+        val labels = ArrayList<String>()
+        labels.add("Otomatis (cari Mobile Legends)")
+        for (a in apps) labels.add(a.second + "\n" + a.first)
+        AlertDialog.Builder(this)
+            .setTitle("Pilih game")
+            .setItems(labels.toTypedArray()) { _, which ->
+                Prefs.pkg = if (which == 0) "" else apps[which - 1].first
+                label.text = gameShort()
+            }
+            .show()
+    }
+
+    // ---------- menu titik tiga dan layar Fungsi pengaturan ----------
+
+    private fun showMenu() {
+        val d = Dialog(this)
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(dp(18), dp(4), dp(18), dp(4))
+        box.background = shape(C_POP, C_ACC, 24)
+        val item = tv("Fungsi pengaturan", 16f)
+        item.gravity = Gravity.CENTER_VERTICAL
+        item.minimumHeight = dp(56)
+        item.setOnClickListener {
+            d.dismiss()
+            help = true
+            render()
+        }
+        box.addView(item, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        d.setContentView(box)
+        d.window?.let { w ->
+            w.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            w.setGravity(Gravity.TOP or Gravity.END)
+            val a = w.attributes
+            a.x = dp(16)
+            a.y = dp(72)
+            w.attributes = a
+        }
+        d.show()
+        d.window?.setLayout(dp(260), ViewGroup.LayoutParams.WRAP_CONTENT)
+    }
+
+    private val helpItems = listOf(
+        "Aksesibilitas" to "Layanan yang dipakai untuk screenshot dan ketukan. Harus aktif. Nyalakan lagi setelah memasang pembaruan.",
+        "Baterai" to "Atur ke tanpa batasan supaya sistem tidak membatasi kecepatan baca layar.",
+        "Aplikasi game" to "Pilih aplikasi Mobile Legends yang dibuka bot.",
+        "Setelah selesai" to "Yang dilakukan bot setelah semua server selesai. VG Klaim dan Home menutup game. Tetap di game tidak menutupnya. Banner hasil klaim selalu tampil.",
+        "Lewati server di atas posisi sekarang" to "Server yang urutannya di atas server awal dianggap sudah selesai dan tidak diklaim.",
+        "Titik melayang saat klaim" to "Titik tak terlihat yang membuat baca layar sekitar 10 kali lebih cepat. Gayanya dipilih lewat Diagnosa umum.",
+        "Jeda antar langkah" to "Lama bot menunggu setelah tiap ketukan sebelum melihat layar lagi, dalam milidetik. 0 berarti tanpa jeda.",
+        "Waktu tunggu lobby" to "Dalam milidetik. Dipakai hanya kalau lobby langsung muncul setelah loading tanpa popup apa pun: bot menunggu selama ini untuk popup yang mungkin muncul. Kalau popup sudah muncul dan ditutup sebelum lobby, waktu ini dilewati.",
+        "Geser daftar server" to "Otomatis: bot mencoba tingkat gesekan sampai berhasil dan mengingatnya. Manual: memakai angka Anda. Uji gesekan menampilkan hasilnya lewat banner.",
+        "Jenis diagnosa" to "Umum / OCR mengukur kecepatan baca dan memilih gaya titik. Geser daftar menguji gesekan di Daftar Karakter. Tombol Diagnosa ada di tab Log.",
+        "Ulangi dari awal" to "Menghapus catatan server yang sudah selesai hari ini."
+    )
+
+    private fun helpPage(): View {
         val (sv, col) = page()
-        col.addView(tv("Templat gambar", 24f, true))
-        col.addView(
-            tv(
-                "Template dipakai untuk mengenali ikon yang tidak berupa tulisan. Semuanya opsional:\n" +
-                    "• x1, x2, ... = tombol tutup X pada popup (nama berawalan x diketuk otomatis)\n" +
-                    "• event = ikon Event, hanya kalau tulisan Event tidak terbaca (jangan diawali x)\n" +
-                    "• avatar = cadangan ikon profil, hanya dipakai kalau posisi tetap di Setelan gagal\n\n" +
-                    "Nama hanya huruf kecil, angka, dan garis bawah. Tombol bertulisan (Klaim, OK, dll.) tidak perlu template.\n" +
-                    "Pilih gambar yang sudah dipotong (tanpa kotak seleksi) = seluruh gambar disimpan. " +
-                    "Atau pilih screenshot lalu kotaki bagiannya.",
-                13f, false, true
-            ), lp()
-        )
-        col.addView(btn("Buat template dari screenshot") {
-            startActivity(Intent(this, TemplateActivity::class.java))
-        }, lp(12))
-        val names = Matcher.names(this)
-        col.addView(tv("Template tersimpan (" + names.size + ")", 14f, true), lp(16))
-        for (n in names) {
-            val r = LinearLayout(this)
-            r.orientation = LinearLayout.HORIZONTAL
-            r.gravity = Gravity.CENTER_VERTICAL
-            val t = tv(n, 15f)
-            r.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            r.addView(btn("Hapus") {
-                java.io.File(Matcher.dir(this), n + ".png").delete()
-                Matcher.reload(this)
-                show(3)
-            })
-            col.addView(r, lp(4))
+        val items = ArrayList<View>()
+        for (i in helpItems.indices) {
+            val b = LinearLayout(this)
+            b.orientation = LinearLayout.VERTICAL
+            b.setPadding(0, dp(14), 0, dp(14))
+            b.addView(tv(helpItems[i].first, 16f, true))
+            val d = tv(helpItems[i].second, 14f, false, C_MUT)
+            d.setLineSpacing(0f, 1.15f)
+            b.addView(d, lpw(0, 4))
+            items.add(b)
+            if (i < helpItems.size - 1) items.add(divider())
         }
+        col.addView(card(*items.toTypedArray()), lpw(0, 4))
+        val w = tv(
+            "Aplikasi ini tidak memiliki izin internet. Layanan Aksesibilitas hanya dipakai untuk screenshot dan ketukan " +
+                "saat klaim berjalan. Matikan layanan ini setelah selesai dan jangan buka aplikasi bank saat aktif. " +
+                "Memakai bot melanggar aturan game dan bisa membuat akun dikenai sanksi.",
+            14f, false, C_MUT
+        )
+        w.setPadding(dp(12), 0, dp(12), 0)
+        col.addView(w, lpw(0, 16))
         return sv
     }
+
+    // ---------- pembaruan tampilan tiap detik ----------
 
     private fun tick() {
-        tvStatus?.text = if (tab == 0) {
-            Engine.status + "\nJumlah: " + Engine.total + " server\nServer selesai: " + Engine.doneCount
+        val total = Engine.total
+        val done = Engine.doneCount
+        if (tab == 0) {
+            tvStatus?.text = Engine.status
+            tvProg?.text = if (total > 0) done.toString() + " dari " + total + " server" else done.toString() + " server"
+            val f = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
+            if (f != lastFrac) {
+                lastFrac = f
+                barFill?.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, f)
+                barRest?.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - f)
+            }
         } else {
-            Engine.status + " | Jumlah: " + Engine.total + " server | Selesai: " + Engine.doneCount
+            tvStatus?.text = Engine.status + " | Jumlah: " + total + " server | Selesai: " + done
         }
         val lg = tvLog
         if (lg != null) {
@@ -494,7 +725,15 @@ class MainActivity : Activity() {
                 lg.text = t
             }
         }
-        tvSvc?.text = if (ClaimService.inst != null) "Layanan Aksesibilitas: AKTIF" else
-            "Layanan Aksesibilitas: BELUM AKTIF (nyalakan 'VG Klaim' di Aksesibilitas)"
+        val sv = tvSvc
+        if (sv != null) {
+            if (ClaimService.inst != null) {
+                sv.text = "Aktif"
+                sv.setTextColor(C_ACC)
+            } else {
+                sv.text = "Belum aktif"
+                sv.setTextColor(C_MUT)
+            }
+        }
     }
 }
