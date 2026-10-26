@@ -17,6 +17,7 @@
 
     <application
         android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
         android:label="VG Klaim"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
@@ -28,8 +29,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <activity android:name=".TemplateActivity" android:exported="false" />
 
         <service
             android:name=".KeepAliveService"
