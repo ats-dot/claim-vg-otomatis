@@ -16,7 +16,7 @@ object Prefs {
     private fun s(): SharedPreferences = sp ?: throw IllegalStateException("Prefs belum init")
 
     var serverCount: Int
-        get() = s().getInt("count", 0)
+        get() = s().getInt("count", 20)
         set(v) { s().edit().putInt("count", v).apply() }
 
     var skipAbove: Boolean
@@ -91,34 +91,7 @@ object Prefs {
         get() = s().getInt("swipe_back_ms", 200)
         set(v) { s().edit().putInt("swipe_back_ms", v.coerceIn(100, 1000)).apply() }
 
-    // Geser persiapan: dijalankan SEKALI sebelum geser cepat pertama pada daftar yang baru dibuka (bisa dimatikan)
-    var prepOn: Boolean
-        get() = s().getBoolean("prep_on", true)
-        set(v) { s().edit().putBoolean("prep_on", v).apply() }
-
-    var prepMs: Int
-        get() = s().getInt("prep_ms", 200)
-        set(v) { s().edit().putInt("prep_ms", v.coerceIn(100, 1000)).apply() }
-
-    var prepStart: Int
-        get() = s().getInt("prep_start", 60)
-        set(v) { s().edit().putInt("prep_start", v.coerceIn(0, 100)).apply() }
-
-    var prepEnd: Int
-        get() = s().getInt("prep_end", 47)
-        set(v) { s().edit().putInt("prep_end", v.coerceIn(0, 100)).apply() }
-
-    // Jeda (ms) sejak daftar terbaca sampai geser pertama. 0 = tanpa jeda
-    var prepDelayMs: Int
-        get() = s().getInt("prep_delay_ms", 1000)
-        set(v) { s().edit().putInt("prep_delay_ms", v.coerceIn(0, 5000)).apply() }
-
     fun resetSwipe() {
-        prepOn = true
-        prepMs = 200
-        prepStart = 60
-        prepEnd = 47
-        prepDelayMs = 1000
         swipeHardMs = 150
         swipeStart = 55
         swipeEnd = 10
