@@ -241,6 +241,7 @@ class ClaimService : AccessibilityService() {
                 .setContentTitle("VG Klaim")
                 .setContentText(text)
                 .setSmallIcon(R.drawable.ic_stat_vg)
+                .setLargeIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_launcher))
                 .setColor(Color.parseColor("#E2C275"))
                 .setAutoCancel(true)
                 .build()
