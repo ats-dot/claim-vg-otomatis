@@ -970,9 +970,10 @@ object Engine {
     private var slowRows = 3.0f
     private var idleSlow = 0
     private var stalled = 0
+    private var idleSince = 0L
     private var lastSig = ""
     private var expectOverride = -1
-    private var prepDone = false
+    private var firstPullSince = 0L
     private var listOpenedAt = 0L
     // Urutan baris yang pernah terlihat di daftar (atas ke bawah). Dipakai untuk tahu apakah layar sudah di baris terdalam.
     private val rowOrder = ArrayList<String>()
@@ -1023,11 +1024,14 @@ object Engine {
         slowRows = 3.0f
         idleSlow = 0
         stalled = 0
+        idleSince = 0L
         lastSig = ""
         rowOrder.clear()
-        prepDone = false
         listOpenedAt = now()
-        if (resetReopen) listReopened = false
+        if (resetReopen) {
+            listReopened = false
+            firstPullSince = now()
+        }
         for (k in serverNums(s).keys) if (k != cur) listSeen.add(k)
         mergeRows(serverNums(s).keys.toList())
     }
@@ -1094,35 +1098,6 @@ object Engine {
 
         if (!listPulled) {
             var base: Map<String, Line> = prev
-            if (!prepDone) {
-                prepDone = true
-                val dly = Prefs.prepDelayMs.toLong()
-                val waitMs = dly - (now() - listOpenedAt)
-                if (dly > 0L && waitMs > 0L) {
-                    log("Geseran (" + tag + "): menunggu " + waitMs + " ms sebelum geser pertama (jeda " + dly + " ms sejak daftar terbaca)")
-                    sleepMs(waitMs)
-                }
-                if (Prefs.prepOn) {
-                    val px = s.w * Prefs.swipeX / 100f
-                    doSwipe(px, s.h * Prefs.prepStart / 100f, px + s.w * 0.02f, s.h * Prefs.prepEnd / 100f, Prefs.prepMs.toLong(),
-                        "geser persiapan (" + Prefs.prepStart + "% ke " + Prefs.prepEnd + "%)")
-                    sleepMs(450)
-                    scrollNo++
-                    var pa = serverNums(cap(R_SERVER).also { scr = it })
-                    if (pa.isEmpty()) pa = serverNums(cap(R_SERVER).also { scr = it })
-                    if (pa.isEmpty()) {
-                        log("Geseran " + scrollNo + " (" + tag + "): daftar tidak terbaca setelah geser persiapan")
-                    } else {
-                        log("Geseran " + scrollNo + " (" + tag + "): geser persiapan, " + (now() - listOpenedAt) + " ms sejak daftar terbaca, " +
-                            movedText(base, pa, rh) + ", terlihat " + rangeText(pa))
-                        for (k in pa.keys) if (k != cur) listSeen.add(k)
-                        mergeRows(pa.keys.toList())
-                        base = pa
-                    }
-                } else {
-                    log("Geseran (" + tag + "): geser persiapan dimatikan")
-                }
-            }
             for (a in 0 until 5) {
                 val seenBefore = listSeen.size
                 val since = now() - listOpenedAt
@@ -1149,9 +1124,9 @@ object Engine {
                 log("Geseran " + scrollNo + " (" + tag + "): geser cepat memuat server baru (percobaan " + (a + 1) + "/5), dimulai " + since + " ms sejak daftar terbaca, " + mv + ", terlihat " + rangeText(after))
                 return settleWindow(r, prev, tag)
             }
-            if (!listReopened) {
-                listReopened = true
-                log("Geseran " + scrollNo + " (" + tag + "): geser cepat gagal 5 kali, membuka ulang Daftar Karakter sekali")
+            // Jangan menyerah: buka ulang daftar dan coba lagi sampai berhasil (pengaman 10 menit)
+            if (now() - firstPullSince < 600_000L) {
+                log("Geseran " + scrollNo + " (" + tag + "): geser cepat gagal 5 kali, membuka ulang Daftar Karakter dan mencoba lagi")
                 val fl = freshList()
                 if (fl != null) {
                     beginList(fl, false)
@@ -1181,6 +1156,7 @@ object Engine {
         if (globalNew > 0) {
             idleSlow = 0
             stalled = 0
+            idleSince = 0L
             val newVsPrev = after.keys.count { !prev.containsKey(it) && it != cur }
             val res = settleWindow(scr, prev, tag)
             slowRows = if (newVsPrev > 2) maxOf(2f, slowRows * 2f / newVsPrev) else 3.0f
@@ -1189,21 +1165,27 @@ object Engine {
 
         // Tidak ada server baru. Geser cepat TIDAK dipakai lagi (hanya sekali di awal daftar).
         // Ujung daftar dikenali dari Jumlah server yang diisi (semua server sudah terlihat), bukan dari layar yang diam.
-        // Lanjut geser pelan melewati baris yang sudah terlihat. Pengaman: kalau layar tidak berubah 4 kali berturut-turut
-        // (atau 25 geseran tanpa server baru) padahal belum semua terlihat, berhenti dengan pesan, bukan menebak ujung.
+        // Kalau belum semua terlihat, bot TIDAK berhenti: terus geser pelan (dengan sedikit jeda tambahan supaya daftar sempat memuat).
+        // Satu-satunya pengaman: 10 menit tanpa server baru, berhenti dengan pesan supaya tidak menggeser selamanya.
         for (k in after.keys) if (k != cur) listSeen.add(k)
         mergeRows(after.keys.toList())
         idleSlow++
+        if (idleSince == 0L) idleSince = now()
         val sig = after.keys.joinToString(",")
         if (sig == lastSig) stalled++ else stalled = 0
         lastSig = sig
-        if (stalled >= 4 || idleSlow > 25) {
-            val msg = "Daftar berhenti bergerak, baru " + listSeen.size + " dari " + expect + " server terlihat. Periksa Jumlah server atau setelan geser pelan"
+        if (now() - idleSince > 600_000L) {
+            val msg = "Daftar tidak menemukan server baru selama 10 menit, baru " + listSeen.size + " dari " + expect + " server terlihat. Periksa Jumlah server atau setelan geser pelan"
             log("Geseran " + scrollNo + " (" + tag + "): " + msg)
             if (expectOverride >= 0) return Step(scr, false, true)
             throw Stop(msg)
         }
-        log("Geseran " + scrollNo + " (" + tag + "): melewati baris yang sudah terlihat, layar " + rangeText(after))
+        if (stalled >= 2) {
+            log("Geseran " + scrollNo + " (" + tag + "): layar tidak berubah " + stalled + " kali, terlihat " + listSeen.size + " dari " + expect + " server. Lanjut geser pelan")
+            sleepMs(800)
+        } else {
+            log("Geseran " + scrollNo + " (" + tag + "): melewati baris yang sudah terlihat, layar " + rangeText(after))
+        }
         return Step(scr, true, false)
     }
 
@@ -1299,7 +1281,7 @@ object Engine {
                     backTaps++
                     log("Popup fitur baru (tanpa tombol X) ditutup dengan Back")
                     back()
-                    sleepMs(700)
+                    sleepMs(250)
                     continue
                 }
                 if (now() - lastTab > 1200L) {
@@ -1412,7 +1394,7 @@ object Engine {
         // Daftar yang baru dibuka selalu di posisi atas: ambil server paling atas yang belum selesai,
         // dan baru menggeser kalau semua server yang terlihat sudah selesai.
         beginList(s)
-        for (page in 0 until 60) {
+        for (page in 0 until 3000) {
             alive()
             for ((n, _) in serverNums(s)) {
                 if (!isDone(n) && n != cur) {
@@ -2217,8 +2199,7 @@ object Engine {
         log("UJI SAMPAI BAWAH: jumlah server " + n + " (daftar berisi " + expect + " baris, server yang sedang dipakai tidak ikut). Mode " +
             "Geser cepat " + Prefs.swipeStart + "% ke " + Prefs.swipeEnd + "%, " + Prefs.swipeHardMs + "ms; geser pelan " +
                 Prefs.swipeSlowStart + "% ke " + Prefs.swipeSlowEnd + "%, " + Prefs.swipeSlowMs + "ms; geser balik " + Prefs.swipeBackStart + "% ke " + Prefs.swipeBackEnd + "%, " +
-                Prefs.swipeBackMs + "ms; x " + Prefs.swipeX + "%; persiapan " +
-                (if (Prefs.prepOn) "" + Prefs.prepStart + "% ke " + Prefs.prepEnd + "%, " + Prefs.prepMs + "ms" else "mati") + "; jeda awal " + Prefs.prepDelayMs + "ms")
+                Prefs.swipeBackMs + "ms; x " + Prefs.swipeX + "%")
         if (!isServerList(s0)) {
             log("UJI SAMPAI BAWAH: ini bukan Daftar Karakter (teks: " + s0.all.take(100) + "). Buka Daftar Karakter lalu ulangi.")
             ClaimService.inst?.banner("Buka Daftar Karakter dulu, lalu ulangi uji", 8000L, false)
@@ -2237,7 +2218,7 @@ object Engine {
         var steps = 0
         try {
             beginList(s)
-            while (steps < 60) {
+            while (steps < 3000) {
                 alive()
                 val st = scrollNext(s!!, "uji sampai bawah")
                 s = st.scr
