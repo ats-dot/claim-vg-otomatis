@@ -553,39 +553,31 @@ class MainActivity : Activity() {
             ), lpw(0, 16)
         )
 
-        // Geser daftar server
-        val modeLabel = tv("Mode geser daftar", 16f)
-        modeLabel.setPadding(0, dp(14), 0, dp(8))
-        val modeSeg = seg(listOf("Otomatis", "Manual"), if (Prefs.swipeAuto) 0 else 1) { k ->
-            Prefs.swipeAuto = (k == 0)
-            render()
-        }
-        val modeBox = LinearLayout(this)
-        modeBox.orientation = LinearLayout.VERTICAL
-        modeBox.setPadding(0, 0, 0, dp(12))
-        modeBox.addView(modeLabel)
-        modeBox.addView(modeSeg)
+        // Geser daftar server (hanya manual)
         val gviews = ArrayList<View>()
-        gviews.add(modeBox)
         fun field(label: String, value: Int, set: (Int) -> Unit) {
-            gviews.add(divider())
+            if (gviews.isNotEmpty()) gviews.add(divider())
             gviews.add(row(label, numBox(value.toString()) { s ->
                 val n = s.trim().toIntOrNull()
                 if (n != null) set(n)
             }))
         }
-        if (!Prefs.swipeAuto) {
-            field("Geser cepat: durasi (ms)", Prefs.swipeHardMs) { Prefs.swipeHardMs = it }
-            field("Geser cepat: awal (% tinggi)", Prefs.swipeStart) { Prefs.swipeStart = it }
-            field("Geser cepat: akhir (% tinggi)", Prefs.swipeEnd) { Prefs.swipeEnd = it }
-            field("Geser pelan: durasi (ms)", Prefs.swipeSlowMs) { Prefs.swipeSlowMs = it }
-            field("Geser pelan: awal (% tinggi)", Prefs.swipeSlowStart) { Prefs.swipeSlowStart = it }
-            field("Geser pelan: akhir (% tinggi)", Prefs.swipeSlowEnd) { Prefs.swipeSlowEnd = it }
-            field("Geser balik: durasi (ms)", Prefs.swipeBackMs) { Prefs.swipeBackMs = it }
-            field("Geser balik: awal (% tinggi)", Prefs.swipeBackStart) { Prefs.swipeBackStart = it }
-            field("Geser balik: akhir (% tinggi)", Prefs.swipeBackEnd) { Prefs.swipeBackEnd = it }
-            field("Posisi X (% lebar)", Prefs.swipeX) { Prefs.swipeX = it }
-        }
+        field("Geser cepat: durasi (ms)", Prefs.swipeHardMs) { Prefs.swipeHardMs = it }
+        field("Geser cepat: awal (% tinggi)", Prefs.swipeStart) { Prefs.swipeStart = it }
+        field("Geser cepat: akhir (% tinggi)", Prefs.swipeEnd) { Prefs.swipeEnd = it }
+        field("Geser pelan: durasi (ms)", Prefs.swipeSlowMs) { Prefs.swipeSlowMs = it }
+        field("Geser pelan: awal (% tinggi)", Prefs.swipeSlowStart) { Prefs.swipeSlowStart = it }
+        field("Geser pelan: akhir (% tinggi)", Prefs.swipeSlowEnd) { Prefs.swipeSlowEnd = it }
+        field("Geser balik: durasi (ms)", Prefs.swipeBackMs) { Prefs.swipeBackMs = it }
+        field("Geser balik: awal (% tinggi)", Prefs.swipeBackStart) { Prefs.swipeBackStart = it }
+        field("Geser balik: akhir (% tinggi)", Prefs.swipeBackEnd) { Prefs.swipeBackEnd = it }
+        field("Posisi X (% lebar)", Prefs.swipeX) { Prefs.swipeX = it }
+        gviews.add(divider())
+        gviews.add(switchRow("Geser persiapan", { Prefs.prepOn }, { Prefs.prepOn = it }))
+        field("Persiapan: durasi (ms)", Prefs.prepMs) { Prefs.prepMs = it }
+        field("Persiapan: awal (% tinggi)", Prefs.prepStart) { Prefs.prepStart = it }
+        field("Persiapan: akhir (% tinggi)", Prefs.prepEnd) { Prefs.prepEnd = it }
+        field("Jeda sebelum geser pertama (ms)", Prefs.prepDelayMs) { Prefs.prepDelayMs = it }
         field("Jumlah server (uji)", Prefs.testCount) { Prefs.testCount = it }
         val bb = LinearLayout(this)
         bb.orientation = LinearLayout.HORIZONTAL
@@ -594,20 +586,16 @@ class MainActivity : Activity() {
             Engine.diagnose(applicationContext, true)
             toast("Buka Daftar Karakter, pindah ke game dalam 15 detik, lalu diam")
         }
-        if (Prefs.swipeAuto) {
-            bb.addView(t1, LinearLayout.LayoutParams(0, dp(48), 1f))
-        } else {
-            val t2 = btn("Bawaan") {
-                Prefs.resetSwipe()
-                render()
-            }
-            val p1 = LinearLayout.LayoutParams(0, dp(48), 1f)
-            p1.setMargins(0, 0, dp(4), 0)
-            val p2 = LinearLayout.LayoutParams(0, dp(48), 1f)
-            p2.setMargins(dp(4), 0, 0, 0)
-            bb.addView(t1, p1)
-            bb.addView(t2, p2)
+        val t2 = btn("Bawaan") {
+            Prefs.resetSwipe()
+            render()
         }
+        val p1 = LinearLayout.LayoutParams(0, dp(48), 1f)
+        p1.setMargins(0, 0, dp(4), 0)
+        val p2 = LinearLayout.LayoutParams(0, dp(48), 1f)
+        p2.setMargins(dp(4), 0, 0, 0)
+        bb.addView(t1, p1)
+        bb.addView(t2, p2)
         gviews.add(divider())
         gviews.add(bb)
         col.addView(section("Geser daftar server", card(*gviews.toTypedArray())), lpw(0, 16))
@@ -679,13 +667,13 @@ class MainActivity : Activity() {
         "Aksesibilitas" to "Layanan yang dipakai untuk screenshot dan ketukan. Harus aktif. Nyalakan lagi setelah memasang pembaruan.",
         "Baterai" to "Atur ke tanpa batasan supaya sistem tidak membatasi kecepatan baca layar.",
         "Aplikasi game" to "Pilih aplikasi Mobile Legends yang dibuka bot.",
-        "Jumlah server" to "Isi jumlah semua server akun ini, termasuk server yang sedang dipakai. Wajib diisi. Bot berhenti mencari server begitu semuanya sudah terlihat.",
+        "Jumlah server" to "Isi jumlah semua server akun ini, termasuk server yang sedang dipakai. Wajib diisi. Bot berhenti mencari server begitu semuanya sudah terlihat. Kalau daftar berhenti bergerak sebelum semua terlihat, bot berhenti dengan pesan, bukan menebak ujung daftar.",
         "Setelah selesai" to "Yang dilakukan bot setelah semua server selesai. VG Klaim dan Home menutup game. Tetap di game tidak menutupnya. Banner hasil klaim selalu tampil.",
         "Lewati server di atas posisi sekarang" to "Server yang urutannya di atas server awal dianggap sudah selesai dan tidak diklaim.",
         "Titik melayang saat klaim" to "Titik tak terlihat yang membuat baca layar sekitar 10 kali lebih cepat. Gayanya dipilih lewat Diagnosa umum.",
         "Jeda antar langkah" to "Lama bot menunggu setelah tiap ketukan sebelum melihat layar lagi, dalam milidetik. 0 berarti tanpa jeda.",
         "Waktu tunggu lobby" to "Dalam milidetik. Dipakai hanya kalau lobby langsung muncul setelah loading tanpa popup apa pun: bot menunggu paling lama selama ini untuk popup. Begitu satu popup muncul dan ditutup, bot langsung lanjut. Kalau popup sudah muncul dan ditutup sebelum lobby, waktu ini dilewati.",
-        "Geser daftar server" to "Geser cepat memuat server baru di ujung daftar (dipakai pertama kali daftar dibuka dan kalau geser pelan tidak menggerakkan layar). Geser pelan menggeser daftar maju. Geser balik menggeser daftar mundur untuk merapikan layar. Angka awal dan akhir adalah persen tinggi layar: 0 di atas, 100 di bawah. Otomatis: bot mencoba tingkat geser cepat sampai berhasil dan mengingatnya. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot menggeser sampai ujung dan melaporkan berapa server yang terlihat.",
+        "Geser daftar server" to "Geser cepat memuat server baru dan HANYA dipakai sekali, saat pertama mencari server baru di daftar yang baru dibuka. Sesudah itu bot hanya geser pelan. Geser pelan menggeser daftar maju. Geser balik menggeser daftar mundur untuk merapikan layar. Geser persiapan dijalankan sekali sebelum geser cepat pertama (bisa dimatikan), dan Jeda sebelum geser pertama (ms) menunggu sejak daftar terbaca (0 = tanpa jeda). Angka awal dan akhir adalah persen tinggi layar: 0 di atas, 100 di bawah. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot menggeser sampai ujung dan melaporkan berapa server yang terlihat.",
         "Jenis diagnosa" to "Umum / OCR mengukur kecepatan baca dan memilih gaya titik. Geser daftar menguji gesekan di Daftar Karakter. Tombol Diagnosa ada di tab Log.",
         "Ulangi dari awal" to "Menghapus catatan server yang sudah selesai hari ini."
     )
