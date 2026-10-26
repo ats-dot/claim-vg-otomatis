@@ -1048,7 +1048,8 @@ object Engine {
         return r
     }
 
-    // Pastikan layar berisi maksimal 2 server baru dan minimal 1 server lama. Kalau lebih, geser balik pelan.
+    // Pastikan layar berisi minimal 1 server lama (patokan). Kalau belum ada, geser balik sampai 1 server lama terlihat.
+    // Jumlah server baru di layar tidak dibatasi.
     private fun settleWindow(start: Scr, prev: Map<String, Line>, tag: String): Step {
         var scr = start
         var rows: Map<String, Line> = serverNums(scr)
@@ -1059,7 +1060,7 @@ object Engine {
             mergeRows(rows.keys.toList())
             val newCount = rows.keys.count { !prev.containsKey(it) && it != cur }
             val oldCount = rows.keys.count { prev.containsKey(it) }
-            if (newCount <= 2 && (oldCount >= 1 || prev.isEmpty())) {
+            if (oldCount >= 1 || prev.isEmpty()) {
                 log("Geseran " + scrollNo + " (" + tag + "): layar " + rangeText(rows) + ", " + newCount + " server baru, " + oldCount + " lama" +
                     (if (steps > 0) " (setelah geser balik " + steps + "x)" else ""))
                 return Step(scr, true, false)
