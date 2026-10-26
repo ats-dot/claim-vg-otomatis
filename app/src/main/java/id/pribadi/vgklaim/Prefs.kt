@@ -36,11 +36,6 @@ object Prefs {
         get() = s().getInt("dot_style", 5)
         set(v) { s().edit().putInt("dot_style", v).apply() }
 
-    // Mode tanpa jeda: tidak ada tidur setelah ketukan. Kalau mati, jeda = stepMs milidetik.
-    var noDelay: Boolean
-        get() = s().getBoolean("no_delay", true)
-        set(v) { s().edit().putBoolean("no_delay", v).apply() }
-
     var stepMs: Int
         get() = s().getInt("step_ms", 400)
         set(v) { s().edit().putInt("step_ms", v.coerceIn(0, 3000)).apply() }
@@ -49,6 +44,44 @@ object Prefs {
     var diagMode: Int
         get() = s().getInt("diag_mode", 0)
         set(v) { s().edit().putInt("diag_mode", v).apply() }
+
+    // Tingkat gesekan keras yang terakhir berhasil memuat baris server baru (0-4), diingat antar sesi
+    var hardLevel: Int
+        get() = s().getInt("hard_level", 0)
+        set(v) { s().edit().putInt("hard_level", v).apply() }
+
+    // Geser daftar server: true = otomatis (bot mencoba tingkat gesekan), false = pakai angka manual di bawah
+    var swipeAuto: Boolean
+        get() = s().getBoolean("swipe_auto", true)
+        set(v) { s().edit().putBoolean("swipe_auto", v).apply() }
+
+    var swipeHardMs: Int
+        get() = s().getInt("swipe_hard_ms", 120)
+        set(v) { s().edit().putInt("swipe_hard_ms", v.coerceIn(40, 400)).apply() }
+
+    var swipeStart: Int
+        get() = s().getInt("swipe_start", 66)
+        set(v) { s().edit().putInt("swipe_start", v.coerceIn(20, 95)).apply() }
+
+    var swipeEnd: Int
+        get() = s().getInt("swipe_end", 8)
+        set(v) { s().edit().putInt("swipe_end", v.coerceIn(0, 60)).apply() }
+
+    var swipeX: Int
+        get() = s().getInt("swipe_x", 77)
+        set(v) { s().edit().putInt("swipe_x", v.coerceIn(10, 95)).apply() }
+
+    var swipeSlowMs: Int
+        get() = s().getInt("swipe_slow_ms", 300)
+        set(v) { s().edit().putInt("swipe_slow_ms", v.coerceIn(100, 1000)).apply() }
+
+    fun resetSwipe() {
+        swipeHardMs = 120
+        swipeStart = 66
+        swipeEnd = 8
+        swipeX = 77
+        swipeSlowMs = 300
+    }
 
     var dotAuto: Boolean
         get() = s().getBoolean("dot_auto", true)
@@ -67,9 +100,10 @@ object Prefs {
         get() = s().getFloat("speed", 1f)
         set(v) { s().edit().putFloat("speed", v).apply() }
 
+    // Waktu tunggu lobby dalam MILIDETIK. Nilai lama (detik, kunci "lobby_wait") otomatis dikonversi.
     var lobbyWait: Int
-        get() = s().getInt("lobby_wait", 3)
-        set(v) { s().edit().putInt("lobby_wait", v).apply() }
+        get() = s().getInt("lobby_wait_ms", s().getInt("lobby_wait", 3) * 1000)
+        set(v) { s().edit().putInt("lobby_wait_ms", v.coerceIn(0, 30000)).apply() }
 
     var pkg: String
         get() = s().getString("pkg", "") ?: ""
