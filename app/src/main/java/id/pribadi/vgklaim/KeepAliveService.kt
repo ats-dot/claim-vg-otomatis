@@ -46,6 +46,7 @@ class KeepAliveService : Service() {
                 .setContentTitle("VG Klaim berjalan")
                 .setContentText("Klaim otomatis sedang berjalan")
                 .setSmallIcon(R.drawable.ic_stat_vg)
+                .setLargeIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_launcher))
                 .setColor(android.graphics.Color.parseColor("#E2C275"))
                 .setOngoing(true)
                 .build()
