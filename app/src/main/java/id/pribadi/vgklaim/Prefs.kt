@@ -75,6 +75,11 @@ object Prefs {
         get() = s().getInt("swipe_slow_ms", 300)
         set(v) { s().edit().putInt("swipe_slow_ms", v.coerceIn(100, 1000)).apply() }
 
+    // Jumlah server untuk Uji sampai bawah
+    var testCount: Int
+        get() = s().getInt("test_count", 20)
+        set(v) { s().edit().putInt("test_count", v.coerceIn(2, 300)).apply() }
+
     fun resetSwipe() {
         swipeHardMs = 120
         swipeStart = 66
