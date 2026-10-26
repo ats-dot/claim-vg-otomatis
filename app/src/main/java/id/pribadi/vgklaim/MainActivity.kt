@@ -607,6 +607,8 @@ class MainActivity : Activity() {
                     switchRow("Titik melayang saat klaim", { Prefs.dotAuto }, { Prefs.dotAuto = it }), divider(),
                     row("Jeda antar langkah (ms)", sm), divider(),
                     row("Waktu tunggu lobby (ms)", lw), divider(),
+                    row("Nomor server pertama", numBox(Prefs.serverMin.toString()) { t -> t.trim().toIntOrNull()?.let { Prefs.serverMin = it } }), divider(),
+                    row("Nomor server terakhir", numBox(Prefs.serverMax.toString()) { t -> t.trim().toIntOrNull()?.let { Prefs.serverMax = it } }), divider(),
                     saveBox
                 )
             ), lpw(0, 16)
@@ -753,6 +755,7 @@ class MainActivity : Activity() {
         "Lewati server di atas posisi sekarang" to "Server yang urutannya di atas server awal dianggap sudah selesai dan tidak diklaim.",
         "Titik melayang saat klaim" to "Titik tak terlihat yang membuat baca layar sekitar 10 kali lebih cepat. Gayanya dipilih lewat Diagnosa umum.",
         "Jeda antar langkah" to "Lama bot menunggu setelah tiap ketukan sebelum melihat layar lagi, dalam milidetik. 0 berarti tanpa jeda.",
+        "Nomor server pertama dan terakhir" to "Hanya nomor server dalam rentang ini (awalnya 57092 sampai 57115) yang dianggap server. Nama yang kehilangan satu digit karena salah baca (misalnya s5094) diperbaiki otomatis kalau hanya ada satu kemungkinan, dan kalau tidak, barisnya diabaikan. Ubah kalau game menambah server.",
         "Waktu tunggu lobby" to "Dalam milidetik. Dipakai hanya kalau lobby langsung muncul setelah loading tanpa popup apa pun: bot menunggu paling lama selama ini untuk popup. Begitu satu popup muncul dan ditutup, bot langsung lanjut. Kalau popup sudah muncul dan ditutup sebelum lobby, waktu ini dilewati.",
         "Geser daftar server" to "Geser cepat memuat server baru dan HANYA dipakai sekali, saat pertama mencari server baru di daftar yang baru dibuka. Sesudah itu bot hanya geser pelan. Geser pelan menggeser daftar maju. Geser balik menggeser daftar mundur, hanya kalau tidak ada server lama yang terlihat. Angka awal dan akhir adalah persen tinggi layar: 0 di atas, 100 di bawah. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot terus menggeser sampai semua server terlihat dan melaporkan hasilnya.",
         "Jenis diagnosa" to "Umum / OCR mengukur kecepatan baca dan memilih gaya titik. Geser daftar menguji gesekan di Daftar Karakter. Tombol Diagnosa ada di tab Log.",
