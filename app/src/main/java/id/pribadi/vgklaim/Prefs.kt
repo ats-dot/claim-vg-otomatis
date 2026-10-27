@@ -108,6 +108,11 @@ object Prefs {
         swipeBackMs = 200
     }
 
+    // Klaim Verifikasi Usia (peti skin -> Vanguard Coin 300) di tiap server. Bisa dimatikan.
+    var claimAge: Boolean
+        get() = s().getBoolean("claim_age", true)
+        set(v) { s().edit().putBoolean("claim_age", v).apply() }
+
     var dotAuto: Boolean
         get() = s().getBoolean("dot_auto", true)
         set(v) { s().edit().putBoolean("dot_auto", v).apply() }
