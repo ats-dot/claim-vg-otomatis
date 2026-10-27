@@ -427,6 +427,31 @@ object Engine {
     private fun eventOpen(s: Scr): Boolean =
         s.has("vanguardcoin", "coinsupply", "pembaruan", "pembaharuan", "masukanadvance")
 
+    // Nama server yang sah: hanya nomor dalam rentang Pengaturan (awalnya s57092 sampai s57115).
+    // OCR yang kehilangan satu digit (misalnya s5094) diperbaiki kalau hanya ada SATU nomor dalam rentang yang cocok.
+    private fun fixSrv(raw: String): String? {
+        val lo = Prefs.serverMin
+        val hi = Prefs.serverMax
+        val digits = raw.filter { it.isDigit() }
+        if (digits.isEmpty()) return null
+        val len = lo.toString().length
+        if (digits.length == len) {
+            val n = digits.toIntOrNull() ?: return null
+            return if (n in lo..hi) "s" + digits else null
+        }
+        if (digits.length == len - 1) {
+            val cands = LinkedHashSet<Int>()
+            for (i in 0..digits.length) {
+                for (d in 0..9) {
+                    val v = (digits.substring(0, i) + d + digits.substring(i)).toIntOrNull() ?: continue
+                    if (v in lo..hi) cands.add(v)
+                }
+            }
+            if (cands.size == 1) return "s" + cands.first()
+        }
+        return null
+    }
+
     private fun serverNums(s: Scr): LinkedHashMap<String, Line> {
         // Baris di atas judul "Semua Server" (bagian "Server Saat Ini") tidak ikut dihitung
         val hdr = s.find("semuaserver")
@@ -436,7 +461,8 @@ object Engine {
             .sortedWith(compareBy({ (it.cy / 40f).toInt() }, { it.cx }))
         val m = LinkedHashMap<String, Line>()
         for (l in sorted) {
-            val k = SRV.find(l.norm)?.value ?: continue
+            val raw = SRV.find(l.norm)?.value ?: continue
+            val k = fixSrv(raw) ?: continue
             if (!m.containsKey(k)) m[k] = l
         }
         return m
@@ -453,12 +479,12 @@ object Engine {
             val c = s.lines
                 .filter { it.cy > h.cy && it.cy < maxY }
                 .sortedBy { it.cy }
-                .mapNotNull { SRV.find(it.norm)?.value }
+                .mapNotNull { l -> SRV.find(l.norm)?.value?.let { v -> fixSrv(v) } }
                 .firstOrNull()
             if (c != null) return c
         }
         val m = Regex("serversaatini(?:[0-9]{4,6})?(s[0-9]{4,6})").find(s.all)
-        return m?.groupValues?.get(1)
+        return m?.groupValues?.get(1)?.let { v -> fixSrv(v) }
     }
 
     private fun setAccount(id: String, from: String) {
@@ -752,15 +778,18 @@ object Engine {
             return false
         }
         if (now() < topupBlockUntil) return false
+        // Maksimal 3 ketukan X (tanpa jeda tambahan, tanpa dibatalkan penjaga ketukan dobel). Kalau popup masih ada,
+        // bot BERHENTI dengan pesan supaya Anda yang memeriksa layarnya.
         if (darkTaps >= 3) {
             darkTaps = 0
-            topupBlockUntil = now() + 60_000L
-            log("Lobby tetap gelap setelah 3 ketukan X. Pemeriksaan popup diabaikan 60 detik")
-            return false
+            val msg = "Popup di lobby tidak bisa ditutup setelah 3 ketukan X. Periksa layar, lalu mulai lagi"
+            log(msg)
+            throw Stop(msg)
         }
         darkTaps++
-        log("Lobby tampak gelap (kecerahan teks Event " + m + "), kemungkinan ada popup")
-        tapXY(s.w * 0.856f, s.h * 0.09f, "tutup X (popup)")
+        val promo = s.has("bintangkeberuntungan") || s.has("penawarankhusus")
+        log("Lobby tampak gelap (kecerahan teks Event " + m + ")" + (if (promo) ", popup promo layar penuh" else ", kemungkinan ada popup") + ", ketukan X " + darkTaps + "/3")
+        tapXY(s.w * 0.856f, s.h * 0.09f, "tutup X (popup)", true)
         popupSeen = true
         return true
     }
@@ -1097,46 +1126,25 @@ object Engine {
         var scr = s
 
         if (!listPulled) {
-            var base: Map<String, Line> = prev
-            for (a in 0 until 5) {
-                val seenBefore = listSeen.size
-                val since = now() - listOpenedAt
-                val r = pullOnce(s, tag)
-                if (r == null) {
-                    sleepMs(500)
-                    continue
-                }
-                scr = r
-                val after = serverNums(r)
-                val extra = after.keys.count { !listSeen.contains(it) && it != cur }
-                for (k in after.keys) if (k != cur) listSeen.add(k)
-                mergeRows(after.keys.toList())
-                val mv = movedText(base, after, rh)
-                base = after
-                // Daftar baru berisi 5 baris: kalau yang terlihat tidak melebihi 5, belum ada server yang dimuat
-                if (seenBefore + extra <= 5) {
-                    log("Geseran " + scrollNo + " (" + tag + "): geser cepat tidak memuat server baru (percobaan " + (a + 1) + "/5), dimulai " + since + " ms sejak daftar terbaca, " + mv)
-                    sleepMs(500)
-                    continue
-                }
-                listPulled = true
-                pullFails = 0
-                log("Geseran " + scrollNo + " (" + tag + "): geser cepat memuat server baru (percobaan " + (a + 1) + "/5), dimulai " + since + " ms sejak daftar terbaca, " + mv + ", terlihat " + rangeText(after))
-                return settleWindow(r, prev, tag)
+            // Geser cepat hanya SEKALI per daftar yang dibuka, apa pun hasilnya. Sesudah itu hanya geser pelan.
+            val seenBefore = listSeen.size
+            val since = now() - listOpenedAt
+            val r = pullOnce(s, tag)
+            listPulled = true
+            pullFails = 0
+            if (r == null) {
+                log("Geseran " + scrollNo + " (" + tag + "): daftar tidak terbaca setelah geser cepat, lanjut geser pelan")
+                return Step(s, true, false)
             }
-            // Jangan menyerah: buka ulang daftar dan coba lagi sampai berhasil (pengaman 10 menit)
-            if (now() - firstPullSince < 600_000L) {
-                log("Geseran " + scrollNo + " (" + tag + "): geser cepat gagal 5 kali, membuka ulang Daftar Karakter dan mencoba lagi")
-                val fl = freshList()
-                if (fl != null) {
-                    beginList(fl, false)
-                    return scrollNext(fl, tag)
-                }
-            }
-            val msg = "Daftar tidak bisa digeser, baru " + listSeen.size + " dari " + expect + " server terlihat"
-            log("Geseran " + scrollNo + " (" + tag + "): " + msg)
-            if (expectOverride >= 0) return Step(scr, false, true)
-            throw Stop(msg)
+            scr = r
+            val after = serverNums(r)
+            val extra = after.keys.count { !listSeen.contains(it) && it != cur }
+            for (k in after.keys) if (k != cur) listSeen.add(k)
+            mergeRows(after.keys.toList())
+            val mv = movedText(prev, after, rh)
+            log("Geseran " + scrollNo + " (" + tag + "): geser cepat sekali, dimulai " + since + " ms sejak daftar terbaca, " + mv + ", terlihat " + rangeText(after) +
+                (if (seenBefore + extra > 5) " (memuat server baru)" else " (belum ada server baru)"))
+            return settleWindow(r, prev, tag)
         }
 
         // Sesudah geser cepat pertama: geser pelan dulu
@@ -1174,6 +1182,15 @@ object Engine {
         val sig = after.keys.joinToString(",")
         if (sig == lastSig) stalled++ else stalled = 0
         lastSig = sig
+        if (stalled >= 4 && listSeen.size <= 5 && now() - firstPullSince < 600_000L) {
+            // Geser cepat sekali tidak memuat apa pun dan geser pelan pun diam: buka ulang daftar. Daftar baru = geser cepat sekali lagi.
+            log("Geseran " + scrollNo + " (" + tag + "): daftar belum memuat server baru, membuka ulang Daftar Karakter")
+            val fl = freshList()
+            if (fl != null) {
+                beginList(fl, false)
+                return Step(fl, true, false)
+            }
+        }
         if (now() - idleSince > 600_000L) {
             val msg = "Daftar tidak menemukan server baru selama 10 menit, baru " + listSeen.size + " dari " + expect + " server terlihat. Periksa Jumlah server atau setelan geser pelan"
             log("Geseran " + scrollNo + " (" + tag + "): " + msg)
@@ -1280,8 +1297,14 @@ object Engine {
                 if (featurePopup(a) && backTaps < 1) {
                     backTaps++
                     log("Popup fitur baru (tanpa tombol X) ditutup dengan Back")
-                    back()
-                    sleepMs(250)
+                    // Back langsung (tanpa jeda antar langkah), tunggu sebentar, lalu ketuk tab dengan posisi yang sudah dibaca
+                    ClaimService.inst?.back()
+                    lastActive = now()
+                    sleepMs(300)
+                    val tb = akunTab(a)
+                    lastTab = now()
+                    tabTaps++
+                    tapXY(tb.first, tb.second, "tab Pengaturan Akun", true)
                     continue
                 }
                 if (now() - lastTab > 1200L) {
