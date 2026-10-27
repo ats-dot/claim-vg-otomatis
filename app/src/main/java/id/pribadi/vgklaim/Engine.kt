@@ -1878,8 +1878,145 @@ object Engine {
         }
     }
 
+    private val panelAge = listOf("verifikasiusia", "penghubunganakun", "orangtua", "satukali")
+
+    // Tombol "Klaim Semua": emas = siap, abu-abu = sudah diklaim. Diukur dari warna di kiri dan kanan tulisan.
+    private fun btnGold(s: Scr, b: Line): Boolean {
+        var r = 0
+        var bl = 0
+        var n = 0
+        val bmp = s.bmp
+        for (x in intArrayOf(b.r.left - 16, b.r.right + 16)) {
+            for (dy in intArrayOf(-12, 0, 12)) {
+                val y = (b.cy + dy).toInt()
+                if (x < 0 || y < 0 || x >= bmp.width || y >= bmp.height) continue
+                val c = bmp.getPixel(x, y)
+                r += (c shr 16) and 255
+                bl += c and 255
+                n++
+            }
+        }
+        if (n == 0) return true
+        return (r - bl) / n > 35
+    }
+
+    private fun cancelPeti() {
+        val s = cap(R_OK)
+        val b = s.exact("batal") ?: s.find("batal")
+        if (b != null) tapLine(b, "Batal (Isi Peti)") else back()
+    }
+
+    // Klaim Verifikasi Usia (sekali per server): menu Verifikasi Usia, Klaim Semua, Gunakan sekarang,
+    // geser peti ke kiri sampai kartu Vanguard Coin, tombol + lalu Konfirmasi, lalu OK. Bisa dimatikan di Pengaturan.
+    private fun claimAge() {
+        val mm = cap(R_MENU)
+        val ml = mm.find("verifikasiusia")
+        if (ml == null) {
+            log("Verifikasi Usia: menu tidak ada, lanjut")
+            return
+        }
+        tapLine(ml, "menu verifikasi usia")
+        val m = waitPanel(panelAge)
+        val b = m.exact("klaimsemua") ?: m.find("klaimsemua")
+        if (b == null) {
+            log("Verifikasi Usia: tombol Klaim Semua tidak terbaca, lanjut")
+            return
+        }
+        if (!btnGold(m, b)) {
+            log("Verifikasi Usia: sudah diklaim")
+            return
+        }
+        tapLine(b, "Klaim Semua (Verifikasi Usia)")
+        lastActive = now()
+
+        // Ketuk "Gunakan sekarang" di popup Memperoleh Hadiah
+        var used = false
+        val t0 = now()
+        while (now() - t0 < 5000L) {
+            alive()
+            val s = cap(R_OK)
+            val g = s.find("gunakansekarang")
+            if (g != null) {
+                tapLine(g, "Gunakan sekarang")
+                used = true
+                break
+            }
+        }
+        if (!used) {
+            log("Verifikasi Usia: tombol Gunakan sekarang tidak muncul, menutup popup hadiah")
+            waitOk()
+            return
+        }
+
+        // Isi Peti: geser ke kiri sampai kartu Vanguard Coin (kotak terakhir) terlihat
+        var found: Scr? = null
+        var seenPeti = false
+        var swipes = 0
+        val t1 = now()
+        while (now() - t1 < 25_000L) {
+            alive()
+            val s = cap()
+            if (s.has("isipeti", "terpilih")) seenPeti = true
+            if (seenPeti && s.has("vanguardcoin")) {
+                found = s
+                break
+            }
+            if (seenPeti && swipes < 14) {
+                doSwipe(s.w * 0.85f, s.h * 0.50f, s.w * 0.15f, s.h * 0.50f, 300, "geser peti ke kiri")
+                swipes++
+                sleepMs(450)
+            }
+        }
+        val f0 = found
+        if (f0 == null) {
+            log("Verifikasi Usia: kartu Vanguard Coin tidak ketemu setelah " + swipes + " geseran, membatalkan")
+            cancelPeti()
+            return
+        }
+        sleepMs(450)
+        val sp = cap()
+        val lbl = sp.find("vanguardcoin") ?: f0.find("vanguardcoin")
+        if (lbl == null) {
+            log("Verifikasi Usia: tulisan Vanguard Coin hilang dari layar, membatalkan")
+            cancelPeti()
+            return
+        }
+        // Tombol + ada di kanan bawah kartu: sekitar 106 px ke kanan dan 123 px ke bawah dari tulisan (layar 2400x1080)
+        val px = lbl.cx + sp.w * 0.0442f
+        val py = lbl.cy + sp.h * 0.1139f
+        var picked = false
+        for (k in 0 until 3) {
+            tapXY(px, py, "tambah (+) kotak Vanguard Coin", true)
+            sleepMs(350)
+            val s2 = cap()
+            // Berhasil kalau tulisan "Terpilih 1/1" terbaca ATAU tombol Konfirmasi sudah berwarna emas (abu-abu = belum terpilih)
+            val kb2 = s2.exact("konfirmasi") ?: s2.find("konfirmasi")
+            if (s2.has("terpilih11") || (kb2 != null && btnGold(s2, kb2))) {
+                picked = true
+                break
+            }
+        }
+        if (!picked) {
+            log("Verifikasi Usia: Vanguard Coin belum terpilih (Terpilih 1/1 tidak terbaca), membatalkan")
+            cancelPeti()
+            return
+        }
+        val sk = cap(R_OK)
+        val kb = sk.exact("konfirmasi") ?: sk.find("konfirmasi")
+        if (kb == null) {
+            log("Verifikasi Usia: tombol Konfirmasi tidak terbaca, membatalkan")
+            cancelPeti()
+            return
+        }
+        tapLine(kb, "Konfirmasi")
+        lastActive = now()
+        if (waitOk()) log("Verifikasi Usia selesai (Vanguard Coin 300)") else log("Verifikasi Usia: popup hasil tidak terbaca")
+    }
+
     private fun claimEvents() {
         openEvent()
+
+        if (Prefs.claimAge) claimAge()
 
         val m1 = openMenu(menuSupply, panelSupply)
         if (m1 != null) {
