@@ -11,7 +11,9 @@ import java.text.Normalizer
 object BbcEngine {
 
     // Server dilewati (bukan kesalahan): koin kurang atau level server belum cukup
-    private class Skip(val why: String) : RuntimeException(why)
+    private class Skip(val why: String, val used: Boolean = false) : RuntimeException(why)
+
+    @Volatile private var lastSkipUsed = false
 
     private const val UNIT = 1000
 
@@ -19,6 +21,10 @@ object BbcEngine {
     @Volatile private var exhausted = false
     private var lastTarget = 0
     private val levelWarned = HashSet<String>()
+
+    // Dibaca saat lobby baru terdeteksi (selagi menunggu popup): bar atas masih menampilkan diamond
+    @Volatile private var seenLevel: Int? = null
+    @Volatile private var seenDiamonds = -1
 
     // ---------- jalan pintas ke Engine ----------
 
@@ -28,6 +34,13 @@ object BbcEngine {
     private fun cap(r: Engine.Reg? = null): Scr = Engine.cap(r)
     private fun tapXY(x: Float, y: Float, why: String) = Engine.tapXY(x, y, why, true)
     private fun tapLine(l: Line, why: String) = Engine.tapXY(l.cx, l.cy, why, true)
+
+    // Ketukan langsung tanpa jeda antar langkah
+    private fun quickTap(x: Float, y: Float, why: String) {
+        Engine.alive()
+        log("Ketuk: " + why)
+        ClaimService.inst?.tap(x, y)
+    }
 
     private fun waitFor(maxMs: Long, pred: (Scr) -> Boolean): Scr? {
         val t0 = now()
@@ -105,6 +118,20 @@ object BbcEngine {
         return true
     }
 
+    // Dipanggil Engine begitu lobby terdeteksi, sebelum popup ditutup. Level dan diamond dibaca di waktu tunggu ini
+    fun onLobbyDetected() {
+        try {
+            seenLevel = lobbyLevel()
+            seenDiamonds = lobbyDiamonds()
+            log("Dibaca saat lobby muncul: level " + (seenLevel ?: "?") + ", diamond " + (if (seenDiamonds < 0) "?" else seenDiamonds.toString()))
+        } catch (e: Engine.Stop) {
+            throw e
+        } catch (_: Throwable) {
+            seenLevel = null
+            seenDiamonds = -1
+        }
+    }
+
     // Level server yang sedang dimainkan: angka kecil di bawah nama pemain di pojok kiri atas lobby
     private fun lobbyLevel(): Int? {
         val s = cap(Engine.Reg(0.0f, 0.0f, 0.30f, 0.14f))
@@ -145,34 +172,74 @@ object BbcEngine {
         Engine.awaitLobby(240)
         Engine.settleLobby()
 
-        Engine.status = "Membaca akun dan daftar server"
-        val ls = Engine.openServerList()
-        val rc = Engine.readCurrent(ls) ?: throw Engine.Stop("Server awal tidak terbaca di Daftar Karakter")
-        Engine.cur = rc
-        if (Engine.acct == "-") {
-            log("Peringatan: ID akun tidak terbaca, server yang dipakai tidak diingat")
-        } else {
-            Engine.done.clear()
-            Engine.done.addAll(Prefs.bbcUsed(Engine.acct))
-        }
+        // ID akun dibaca dari layar Memuat Game (Role). Daftar Karakter TIDAK dibuka di awal: server awal diperkirakan
+        // sama dengan server terakhir yang dipakai kirim BBC, dan nama server awal baru dibaca sesudah kiriman pertama.
         Engine.total = Prefs.serverCount
-        log("Server awal: " + rc + ", akun " + Engine.acct + ", server yang sudah dipakai kirim BBC: " + Engine.done.size)
+        var needLobby = false
+        if (Engine.acct == "-") {
+            Engine.status = "Membaca akun dan daftar server"
+            log("ID akun tidak terbaca dari layar loading, membaca lewat Daftar Karakter")
+            val ls = Engine.openServerList()
+            val rc = Engine.readCurrent(ls) ?: throw Engine.Stop("Server awal tidak terbaca di Daftar Karakter")
+            Engine.cur = rc
+            needLobby = true
+            if (Engine.acct == "-") log("Peringatan: ID akun tidak terbaca, server yang dipakai tidak diingat")
+        } else {
+            val tr = Prefs.bbcTry(Engine.acct)
+            val last = Prefs.bbcLast(Engine.acct)
+            if (tr == "!") {
+                // Kiriman terakhir berhasil tapi proses berhenti sebelum nama servernya tercatat: server awal sudah terpakai
+                Engine.status = "Membaca server awal"
+                log("Kiriman terakhir belum tercatat, membaca nama server awal")
+                val ls = Engine.openServerList()
+                val rc = Engine.readCurrent(ls) ?: throw Engine.Stop("Server awal tidak terbaca di Daftar Karakter")
+                Engine.cur = rc
+                markUsed(rc)
+                Prefs.bbcClearTry(Engine.acct)
+                needLobby = true
+            } else if (tr.isNotEmpty() && tr != "?") {
+                Engine.cur = tr
+                log("Melanjutkan di server " + tr + " (percobaan sebelumnya belum selesai)")
+            } else if (tr == "?") {
+                log("Melanjutkan di server awal (percobaan sebelumnya belum selesai)")
+            } else if (last.isNotEmpty() && Engine.done.contains(last)) {
+                Engine.cur = last
+                log("Server awal diperkirakan " + last + " (server terakhir yang dipakai kirim BBC), dilewati")
+            }
+        }
+        log("Akun " + Engine.acct + ", server yang sudah dipakai kirim BBC: " + Engine.done.size)
 
-        var needLobby = true
         var resetDone = false
         var guard = 0
         while (true) {
             Engine.alive()
-            val cur = Engine.cur ?: throw Engine.Stop("Server saat ini tidak diketahui")
-            if (!Engine.done.contains(cur) && !Engine.skipped.contains(cur)) {
+            var cur = Engine.cur
+            if (cur != null && (Engine.done.contains(cur) || Engine.skipped.contains(cur))) {
+                log("Server " + cur + " sudah dipakai, dilewati")
+            } else {
                 if (needLobby) {
                     Engine.backToLobby()
                     needLobby = false
                 }
-                sendOnServer(cur, guard == 0)
+                val sent = sendOnServer(cur, guard == 0)
+                if (cur == null) {
+                    // Nama server awal baru diketahui sekarang
+                    val ls = Engine.openServerList()
+                    val rc = Engine.readCurrent(ls) ?: throw Engine.Stop("Server awal tidak terbaca di Daftar Karakter")
+                    Engine.cur = rc
+                    cur = rc
+                    needLobby = true
+                    log("Server awal ternyata " + rc)
+                    if (sent && Engine.done.contains(rc)) log("Peringatan: server " + rc + " sudah pernah dipakai kirim BBC sebelumnya")
+                    if (Engine.acct != "-") Prefs.bbcClearTry(Engine.acct)
+                    if (sent || lastSkipUsed) {
+                        markUsed(rc)
+                    } else {
+                        Engine.skipped.add(rc)
+                        Engine.refreshCount()
+                    }
+                }
                 if (finished) break
-            } else {
-                log("Server " + cur + " sudah dipakai, dilewati")
             }
             guard++
             if (guard > 80) throw Engine.Stop("Terlalu banyak server")
@@ -198,17 +265,29 @@ object BbcEngine {
         Engine.finishAction()
     }
 
+    private fun markUsed(name: String) {
+        Engine.done.add(name)
+        if (Engine.acct != "-") {
+            Prefs.bbcAddUsed(Engine.acct, name)
+            Prefs.bbcSetLast(Engine.acct, name)
+        }
+        Engine.refreshCount()
+    }
+
     // ---------- satu server pengirim ----------
 
-    private fun sendOnServer(name: String, firstOfRun: Boolean) {
-        Engine.status = "Kirim BBC di " + name
-        log("===== SERVER " + name + " (kirim BBC) =====")
+    private fun sendOnServer(name: String?, firstOfRun: Boolean): Boolean {
+        val label = name ?: "(server awal)"
+        lastSkipUsed = false
+        Engine.status = "Kirim BBC di " + label
+        log("===== SERVER " + label + " (kirim BBC) =====")
         val t0 = now()
+        if (Engine.acct != "-") Prefs.bbcSetTry(Engine.acct, name ?: "?")
         try {
             // Level dicek di lobby HANYA untuk server pertama di akun ini (server awal). Server berikutnya sudah dicek
             // dari Daftar Karakter saat dipilih, jadi tidak perlu membaca lobby lagi.
             if (firstOfRun) {
-                val lv = lobbyLevel()
+                val lv = seenLevel ?: lobbyLevel()
                 if (lv == null) {
                     log("Level server awal di lobby tidak terbaca, dilanjutkan")
                 } else {
@@ -217,9 +296,9 @@ object BbcEngine {
                 }
             }
             if (Prefs.bbcClaimFirst) {
-                Engine.status = "Klaim di " + name
+                Engine.status = "Klaim di " + label
                 Engine.claimEvents()
-                Engine.status = "Kirim BBC di " + name
+                Engine.status = "Kirim BBC di " + label
             }
             ensureDiamonds()
             closeSquadPopup()
@@ -236,10 +315,14 @@ object BbcEngine {
             sendYacht(ls)
             val sentNow = Prefs.bbcPendSent + UNIT
             Prefs.bbcPendSent = sentNow
-            Engine.done.add(name)
-            if (Engine.acct != "-") Prefs.bbcAddUsed(Engine.acct, name)
-            Engine.refreshCount()
-            log("Kiriman berhasil di " + name + ": terkirim " + sentNow + " dari " + Prefs.bbcPendTarget + " BBC (" + ((now() - t0) / 1000) + " dtk)")
+            // Catat segera supaya tidak hilang kalau proses berhenti sesudah ini
+            if (name != null) {
+                markUsed(name)
+                if (Engine.acct != "-") Prefs.bbcClearTry(Engine.acct)
+            } else if (Engine.acct != "-") {
+                Prefs.bbcSetTry(Engine.acct, "!")
+            }
+            log("Kiriman berhasil di " + label + ": terkirim " + sentNow + " dari " + Prefs.bbcPendTarget + " BBC (" + ((now() - t0) / 1000) + " dtk)")
             // kembali ke profil
             Engine.back()
             waitFor(4000) { it.has("zonapribadi") }
@@ -252,24 +335,32 @@ object BbcEngine {
                 log("SELESAI. Pesanan " + lastTarget + " BBC terkirim ke ID " + Prefs.bbcId.trim())
             }
             toLobby()
+            seenLevel = null
+            seenDiamonds = -1
+            return true
         } catch (e: Skip) {
-            log("Server " + name + " dilewati: " + e.why)
-            Engine.skipped.add(name)
-            Engine.refreshCount()
+            log("Server " + label + " dilewati: " + e.why)
+            lastSkipUsed = e.used
+            if (Engine.acct != "-" && name != null) Prefs.bbcClearTry(Engine.acct)
+            if (name != null) {
+                if (e.used) {
+                    markUsed(name)
+                } else {
+                    Engine.skipped.add(name)
+                    Engine.refreshCount()
+                }
+            }
             toLobby()
+            seenLevel = null
+            seenDiamonds = -1
+            return false
         }
     }
 
     // ---------- diamond ----------
 
-    private fun lobbyDiamonds(): Int {
-        val s = cap(Engine.R_TOP)
-        val nums = s.lines.filter {
-            it.norm.isNotEmpty() && it.norm.length <= 6 && it.norm.all { c -> c.isDigit() } &&
-                it.cx > s.w * 0.50f && it.cx < s.w * 0.74f
-        }
-        val l = nums.maxByOrNull { it.cx } ?: return -1
-        // Ikon di kiri angka: biru = diamond, emas = Vanguard Coin
+    // Ikon di kiri sebuah angka: biru = diamond, emas = Vanguard Coin
+    private fun blueIconLeftOf(s: Scr, l: Line): Boolean {
         val ix = (l.r.left - s.w * 0.014f).toInt()
         var rr = 0
         var bb = 0
@@ -285,21 +376,61 @@ object BbcEngine {
                 n++
             }
         }
-        if (n == 0) return -1
-        if ((bb - rr) / n <= 20) {
+        if (n == 0) return false
+        return (bb - rr) / n > 20
+    }
+
+    private fun lobbyDiamonds(): Int {
+        val s = cap(Engine.R_TOP)
+        val nums = s.lines.filter {
+            it.norm.isNotEmpty() && it.norm.length <= 6 && it.norm.all { c -> c.isDigit() } &&
+                it.cx > s.w * 0.50f && it.cx < s.w * 0.74f
+        }
+        val l = nums.maxByOrNull { it.cx } ?: return -1
+        if (!blueIconLeftOf(s, l)) {
             log("Bar atas lobby sedang menampilkan koin lain (bukan diamond)")
             return -1
         }
         return l.norm.toIntOrNull() ?: -1
     }
 
-    private fun ensureDiamonds() {
-        val d = lobbyDiamonds()
-        if (d >= UNIT) {
-            log("Diamond di lobby: " + d + ", tidak perlu Top Up")
-            return
+    // Pita merah "Top Up Pertama" di pojok kanan atas kartu: ada = bonus pembelian pertama kartu itu belum terpakai
+    private fun firstBadge(t: Scr, card: Line): Boolean {
+        val x0 = (card.cx + t.w * 0.055f).toInt()
+        val x1 = (card.cx + t.w * 0.120f).toInt()
+        val y0 = (card.cy - t.h * 0.045f).toInt()
+        val y1 = (card.cy + t.h * 0.030f).toInt()
+        var red = 0
+        var y = y0
+        while (y < y1) {
+            var x = x0
+            while (x < x1) {
+                if (x >= 0 && y >= 0 && x < t.bmp.width && y < t.bmp.height) {
+                    val c = t.bmp.getPixel(x, y)
+                    val r = (c shr 16) and 255
+                    val g = (c shr 8) and 255
+                    val bl = c and 255
+                    if (r > 170 && g < 90 && bl < 90) red++
+                }
+                x += 3
+            }
+            y += 3
         }
-        log("Diamond di lobby: " + (if (d < 0) "tidak terbaca" else d.toString()) + ", ke menu Top Up")
+        return red >= 40
+    }
+
+    private fun ensureDiamonds() {
+        if (Prefs.bbcClaimFirst) {
+            // Klaim dulu aktif: akun ini belum diklaim, jadi belum punya diamond. Bar atas lobby juga sudah berganti ke bintang
+            log("Klaim dulu aktif, langsung ke menu Top Up")
+        } else {
+            val d = if (seenDiamonds >= 0) seenDiamonds else lobbyDiamonds()
+            if (d >= UNIT) {
+                log("Diamond di lobby: " + d + ", tidak perlu Top Up")
+                return
+            }
+            log("Diamond di lobby: " + (if (d < 0) "tidak terbaca" else d.toString()) + ", ke menu Top Up")
+        }
         for (round in 0 until 2) {
             if (buyDiamonds() == 0) return
             if (round == 1) throw Skip("Vanguard Coin belum cukup untuk kirim BBC")
@@ -319,18 +450,31 @@ object BbcEngine {
         val l0 = cap()
         tapXY(l0.w * 0.730f, l0.h * 0.054f, "tanda + di lobby (Top Up)")
         var t = waitFor(7000) { isTopUp(it) } ?: throw Engine.Stop("Menu Top Up tidak terbuka")
-        // Harga harus dalam Vanguard Coin. Mode diamond menampilkan harga Rupiah ("Rp ...")
-        for (i in 0 until 3) {
-            if (!rpMode(t)) break
+        // Harga harus dalam Vanguard Coin. Mode diamond menampilkan harga Rupiah ("Rp ..."). Tunggu halaman tenang,
+        // ketuk Ganti SEKALI, lalu tunggu harganya berubah (jangan mengetuk berulang karena bisa membalikkan lagi)
+        sleepMs(600)
+        t = cap()
+        if (rpMode(t)) {
             val g = t.lines.firstOrNull { it.norm == "ganti" } ?: t.find("ganti") ?: throw Engine.Stop("Tombol Ganti tidak terbaca di menu Top Up")
             tapLine(g, "Ganti (harga Vanguard Coin)")
-            sleepMs(800)
-            t = cap()
+            val tg = now()
+            while (now() - tg < 3000 && rpMode(t)) {
+                Engine.alive()
+                sleepMs(300)
+                t = cap()
+            }
+            if (rpMode(t)) {
+                val g2 = t.lines.firstOrNull { it.norm == "ganti" } ?: t.find("ganti") ?: throw Engine.Stop("Tombol Ganti tidak terbaca di menu Top Up")
+                tapLine(g2, "Ganti (ulang)")
+                sleepMs(1200)
+                t = cap()
+            }
         }
         if (rpMode(t)) throw Engine.Stop("Harga masih Rupiah setelah mengetuk Ganti")
         val card = t.lines.firstOrNull { it.norm == "500diamond" }
             ?: t.lines.firstOrNull { it.norm.length == 10 && lev(it.norm, "500diamond") <= 1 }
             ?: throw Engine.Stop("Kartu 500 Diamond tidak ketemu di menu Top Up")
+        if (!firstBadge(t, card)) throw Skip("bonus Top Up Pertama 500 Diamond sudah terpakai", true)
         tapXY(card.cx + t.w * 0.034f, card.cy + t.h * 0.12f, "kartu 500 Diamond")
         val d = waitFor(4500) { it.has("pemberitahuansistem", "lanjutkan") } ?: throw Engine.Stop("Dialog harga tidak muncul setelah memilih 500 Diamond")
         val price = d.lines.firstOrNull { it.norm == "500" && it.cx > d.w * 0.45f && it.cx < d.w * 0.56f && it.cy > d.h * 0.38f && it.cy < d.h * 0.58f }
@@ -339,21 +483,30 @@ object BbcEngine {
         tapLine(kb, "Konfirmasi (500 Diamond)")
         val res = waitFor(6500) { it.has("tidakcukup") || it.has("memperolehhadiah") } ?: throw Engine.Stop("Hasil pembelian tidak dikenali")
         if (res.has("tidakcukup")) return 1
-        Engine.waitOk()
-        // Popup Hadiah Top Up Pertama dan Skin Deluxe: tutup dengan X (yang kedua kadang tidak muncul)
-        sleepMs(900)
-        var clean = 0
-        for (i in 0 until 8) {
+        // Hasil pembelian: OK lalu X popup pertama dan kedua, beruntun tanpa jeda (posisi tombol tidak berpindah)
+        val okb = Engine.okBtn(res)
+        quickTap(okb?.cx ?: (res.w * 0.5f), okb?.cy ?: (res.h * 0.893f), "OK (Memperoleh Hadiah)")
+        sleepMs(150)
+        quickTap(res.w * 0.858f, res.h * 0.076f, "tutup X (popup pertama)")
+        sleepMs(150)
+        quickTap(res.w * 0.858f, res.h * 0.076f, "tutup X (popup kedua)")
+        // Sisa popup yang muncul terlambat: ketuk X begitu terlihat
+        var quietFrom = now()
+        val tEnd = now() + 9000
+        while (now() < tEnd) {
             Engine.alive()
             val s2 = cap()
-            if (s2.has("pilihhadiah", "topupsekarang", "skindeluxe")) {
-                clean = 0
-                tapXY(s2.w * 0.858f, s2.h * 0.076f, "tutup X (popup Top Up)")
-                sleepMs(600)
+            if (s2.has("pilihhadiah", "topupsekarang", "skindeluxe", "memperolehhadiah")) {
+                if (s2.has("memperolehhadiah")) {
+                    val o2 = Engine.okBtn(s2)
+                    quickTap(o2?.cx ?: (s2.w * 0.5f), o2?.cy ?: (s2.h * 0.893f), "OK (Memperoleh Hadiah)")
+                } else {
+                    quickTap(s2.w * 0.858f, s2.h * 0.076f, "tutup X (popup Top Up)")
+                }
+                quietFrom = now()
             } else {
-                clean++
-                if (clean >= 2) break
-                sleepMs(600)
+                if (now() - quietFrom > 900) break
+                sleepMs(100)
             }
         }
         log("Top Up 500 Diamond selesai")
@@ -396,49 +549,131 @@ object BbcEngine {
     private fun typeId(id: String) {
         val s0 = cap()
         val box = s0.lines.firstOrNull { it.norm.contains("ketukuntuk") }
-        tapXY(box?.cx ?: (s0.w * 0.298f), box?.cy ?: (s0.h * 0.222f), "kotak ID")
-        sleepMs(900)
+        quickTap(box?.cx ?: (s0.w * 0.298f), box?.cy ?: (s0.h * 0.222f), "kotak ID")
         val svc = ClaimService.inst ?: throw Engine.Stop("Layanan Aksesibilitas tidak aktif")
-        val r = svc.inputText(id)
+        // Isi seluruh ID sekaligus begitu papan ketik siap (ulangi tiap 0,2 detik, maksimal 4 detik)
+        var r = ""
+        val t0 = now()
+        while (now() - t0 < 4000) {
+            Engine.alive()
+            r = svc.inputText(id)
+            if (r == "OK" || r.contains("jendela=0")) break
+            sleepMs(200)
+        }
         log("Isi ID lewat Aksesibilitas: " + r)
-        sleepMs(600)
-        if (cap().all.contains(id)) {
-            log("ID terisi (terbaca di layar)")
+        if (r == "OK") {
+            pressOke()
+            if (cap().all.contains(id)) log("ID terisi (terbaca di dialog)") else log("ID belum terbaca di dialog, dilanjutkan")
             return
         }
-        log("ID belum terbaca di layar, mencoba lewat tombol angka papan ketik")
+        log("Pengisian otomatis gagal, mengetik lewat tombol angka papan ketik")
         if (typeByKeyboard(id)) {
-            sleepMs(400)
+            sleepMs(300)
             if (cap().all.contains(id)) {
                 log("ID terisi lewat papan ketik")
+                closeKeyboard()
                 return
             }
+            log("ID yang diketik belum terbaca di layar")
         }
         throw Engine.Stop("Tidak bisa mengisi kotak ID. Kirim log ke Claude")
     }
 
-    private fun typeByKeyboard(id: String): Boolean {
+    // Langsung ketuk OKE di kanan atas papan ketik (tanpa jeda), cadangan: tutup papan ketik
+    private fun pressOke() {
         val s = cap()
-        val pos = HashMap<Char, Pair<Float, Float>>()
-        for (l in s.lines) {
-            if (l.cy < s.h * 0.50f) continue
-            if (l.norm.length == 1 && l.norm[0].isDigit()) pos[l.norm[0]] = Pair(l.cx, l.cy)
-        }
-        val row = s.lines.firstOrNull { it.cy > s.h * 0.50f && (it.norm.contains("1234567890") || it.norm.contains("123456789")) }
-        val count = if (row != null && row.norm.contains("1234567890")) 10 else 9
-        for (ch in id) {
-            var p = pos[ch]
-            if (p == null && row != null) {
-                val idx = "1234567890".indexOf(ch)
-                if (idx in 0 until count) p = Pair(row.r.left + (idx + 0.5f) * row.r.width() / count, row.cy)
+        val ok = s.lines.firstOrNull { (it.norm == "oke" || it.norm == "ok" || it.norm == "selesai") && it.cx > s.w * 0.80f && it.cy < s.h * 0.25f }
+        if (ok != null) quickTap(ok.cx, ok.cy, "OKE (selesai mengisi ID)") else closeKeyboard()
+    }
+
+    private fun isLightKey(c: Int): Boolean {
+        val r = (c shr 16) and 255
+        val g = (c shr 8) and 255
+        val b = c and 255
+        val mx = maxOf(r, maxOf(g, b))
+        val mn = minOf(r, minOf(g, b))
+        return mx > 120 && mx - mn < 45
+    }
+
+    // Letak tombol angka 1..0 di papan ketik, dicari dari bentuk tombol (baris tombol terang pertama di bawah bilah atas).
+    // Mengembalikan 10 titik pusat (urutan 1,2,...,9,0) atau null kalau papan ketik tidak terlihat.
+    private fun digitKeys(s: Scr): List<Pair<Float, Float>>? {
+        val bmp = s.bmp
+        val w = bmp.width
+        val h = bmp.height
+        var y = (h * 0.30f).toInt()
+        var bandStart = -1
+        var bandEnd = -1
+        while (y < (h * 0.95f).toInt()) {
+            var cnt = 0
+            var tot = 0
+            var x = 0
+            while (x < w) {
+                if (isLightKey(bmp.getPixel(x, y))) cnt++
+                tot++
+                x += 6
             }
-            if (p == null) {
-                log("Tombol angka " + ch + " tidak ditemukan di papan ketik")
+            val frac = cnt.toFloat() / tot
+            if (frac > 0.35f) {
+                if (bandStart < 0) bandStart = y
+                bandEnd = y
+            } else if (bandStart >= 0) {
+                break
+            }
+            y += 3
+        }
+        if (bandStart < 0 || bandEnd - bandStart < h * 0.03f) return null
+        // Garis di bagian atas tombol (di atas angka) supaya angka tidak memotong tombol
+        val yl = bandStart + ((bandEnd - bandStart) * 0.18f).toInt()
+        val runs = ArrayList<IntArray>()
+        var start = -1
+        var x = 0
+        while (x < w) {
+            if (isLightKey(bmp.getPixel(x, yl))) {
+                if (start < 0) start = x
+            } else if (start >= 0) {
+                if (x - start > w * 0.03f) runs.add(intArrayOf(start, x))
+                start = -1
+            }
+            x += 2
+        }
+        if (start >= 0 && w - start > w * 0.03f) runs.add(intArrayOf(start, w))
+        if (runs.size != 10) {
+            log("Baris tombol angka tidak terdeteksi (terbaca " + runs.size + " tombol)")
+            return null
+        }
+        val yc = (bandStart + bandEnd) / 2f
+        return runs.map { Pair((it[0] + it[1]) / 2f, yc) }
+    }
+
+    private fun typeByKeyboard(id: String): Boolean {
+        val keys = digitKeys(cap())
+        if (keys == null) {
+            log("Papan ketik tidak terlihat")
+            return false
+        }
+        for (ch in id) {
+            if (!ch.isDigit()) {
+                log("Karakter " + ch + " bukan angka, tidak bisa diketik")
                 return false
             }
+            val idx = if (ch == '0') 9 else ch - '1'
+            val p = keys[idx]
             tapXY(p.first, p.second, "ketik " + ch)
         }
         return true
+    }
+
+    // Papan ketik layar penuh (lanskap) menutupi dialog: tutup dengan tombol OKE di kanan atas, atau Back
+    private fun closeKeyboard() {
+        for (i in 0 until 4) {
+            val s = cap()
+            val kb = digitKeys(s) != null || s.has("bahasaindonesia")
+            if (!kb || s.has("cariid")) return
+            val ok = s.lines.firstOrNull { (it.norm == "oke" || it.norm == "ok" || it.norm == "selesai") && it.cx > s.w * 0.80f && it.cy < s.h * 0.25f }
+            if (ok != null) tapLine(ok, "OKE (tutup papan ketik)") else Engine.back()
+            sleepMs(600)
+        }
     }
 
     // Baris teratas hasil pencarian (nama, tanpa level dan status online)
