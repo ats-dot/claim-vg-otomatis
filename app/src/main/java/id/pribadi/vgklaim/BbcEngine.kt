@@ -105,6 +105,16 @@ object BbcEngine {
         return true
     }
 
+    // Level server yang sedang dimainkan: angka kecil di bawah nama pemain di pojok kiri atas lobby
+    private fun lobbyLevel(): Int? {
+        val s = cap(Engine.Reg(0.0f, 0.0f, 0.30f, 0.14f))
+        val l = s.lines.firstOrNull {
+            it.norm.isNotEmpty() && it.norm.length <= 3 && it.norm.all { c -> c.isDigit() } &&
+                it.cx > s.w * 0.05f && it.cx < s.w * 0.17f && it.cy > s.h * 0.05f && it.cy < s.h * 0.11f
+        } ?: return null
+        return l.norm.toIntOrNull()
+    }
+
     // ---------- alur utama ----------
 
     fun main() {
@@ -159,7 +169,7 @@ object BbcEngine {
                     Engine.backToLobby()
                     needLobby = false
                 }
-                sendOnServer(cur)
+                sendOnServer(cur, guard == 0)
                 if (finished) break
             } else {
                 log("Server " + cur + " sudah dipakai, dilewati")
@@ -190,11 +200,22 @@ object BbcEngine {
 
     // ---------- satu server pengirim ----------
 
-    private fun sendOnServer(name: String) {
+    private fun sendOnServer(name: String, firstOfRun: Boolean) {
         Engine.status = "Kirim BBC di " + name
         log("===== SERVER " + name + " (kirim BBC) =====")
         val t0 = now()
         try {
+            // Level dicek di lobby HANYA untuk server pertama di akun ini (server awal). Server berikutnya sudah dicek
+            // dari Daftar Karakter saat dipilih, jadi tidak perlu membaca lobby lagi.
+            if (firstOfRun) {
+                val lv = lobbyLevel()
+                if (lv == null) {
+                    log("Level server awal di lobby tidak terbaca, dilanjutkan")
+                } else {
+                    log("Level server awal di lobby: " + lv)
+                    if (lv < Prefs.bbcMinLevel) throw Skip("level " + lv + " (minimal " + Prefs.bbcMinLevel + ")")
+                }
+            }
             if (Prefs.bbcClaimFirst) {
                 Engine.status = "Klaim di " + name
                 Engine.claimEvents()
@@ -499,8 +520,15 @@ object BbcEngine {
         val g = gp ?: throw Engine.Stop("Daftar hadiah (Yacht) tidak muncul")
         val y = g.lines.firstOrNull { it.norm == "yacht" } ?: g.find("yacht") ?: throw Engine.Stop("Tulisan Yacht tidak terbaca")
         val before = panelDiamonds(g)
-        tapXY(y.cx, y.cy - g.h * 0.055f, "Yacht (1000 diamond)")
-        val d = waitFor(4000) { it.has("berihadiah") || it.has("mencapailv") } ?: throw Engine.Stop("Dialog Beri Hadiah tidak muncul")
+        // Dua kemungkinan yang tidak pernah muncul bersamaan: dialog Beri Hadiah (level cukup) atau tulisan
+        // "Mencapai Lv ... untuk mengirim!" tanpa dialog (level kurang, server dilewati)
+        var d: Scr? = null
+        for (att in 0 until 2) {
+            tapXY(y.cx, y.cy - g.h * 0.055f, "Yacht (1000 diamond)")
+            d = waitFor(3500) { it.has("berihadiah") || it.has("mencapailv") }
+            if (d != null) break
+        }
+        if (d == null) throw Engine.Stop("Dialog Beri Hadiah tidak muncul")
         if (d.has("mencapailv") && !d.has("berihadiah")) throw Skip("level server belum cukup (Mencapai Lv ... untuk mengirim)")
         if (!d.has("kirimyacht")) throw Engine.Stop("Dialog Beri Hadiah bukan Yacht, tidak dikonfirmasi")
         val kb = d.lines.filter { it.norm == "konfirmasi" && it.cy > d.h * 0.60f }.firstOrNull() ?: d.find("konfirmasi") ?: throw Engine.Stop("Tombol Konfirmasi hadiah tidak terbaca")
