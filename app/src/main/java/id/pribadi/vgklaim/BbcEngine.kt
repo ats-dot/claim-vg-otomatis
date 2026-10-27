@@ -1,0 +1,594 @@
+package id.pribadi.vgklaim
+
+import android.content.ContentValues
+import android.graphics.Bitmap
+import android.provider.MediaStore
+import java.text.Normalizer
+
+// Proses Kirim BBC. Memakai mesin layar milik Engine (baca layar, ketuk, pindah server).
+// Per server pengirim: (klaim dulu) -> cek diamond di lobby -> Top Up 500 Diamond -> cari akun penerima lewat ID
+// -> Live Stream -> Tonton -> hadiah -> Yacht 1000 diamond -> kembali ke lobby -> server berikutnya.
+object BbcEngine {
+
+    // Server dilewati (bukan kesalahan): koin kurang atau level server belum cukup
+    private class Skip(val why: String) : RuntimeException(why)
+
+    private const val UNIT = 1000
+
+    @Volatile private var finished = false
+    @Volatile private var exhausted = false
+    private var lastTarget = 0
+    private val levelWarned = HashSet<String>()
+
+    // ---------- jalan pintas ke Engine ----------
+
+    private fun log(m: String) = Engine.log(m)
+    private fun now(): Long = Engine.now()
+    private fun sleepMs(ms: Long) = Engine.sleepMs(ms)
+    private fun cap(r: Engine.Reg? = null): Scr = Engine.cap(r)
+    private fun tapXY(x: Float, y: Float, why: String) = Engine.tapXY(x, y, why, true)
+    private fun tapLine(l: Line, why: String) = Engine.tapXY(l.cx, l.cy, why, true)
+
+    private fun waitFor(maxMs: Long, pred: (Scr) -> Boolean): Scr? {
+        val t0 = now()
+        while (now() - t0 < maxMs) {
+            Engine.alive()
+            val s = cap()
+            if (pred(s)) return s
+            sleepMs(200)
+        }
+        return null
+    }
+
+    // ---------- data pesanan ----------
+
+    fun validate(): String? {
+        val id = Prefs.bbcId.trim()
+        if (id.isEmpty() || !id.all { it.isDigit() }) return "Isi ID penerima dulu (angka)"
+        val a = Prefs.bbcAmount
+        if (a <= 0 || a % UNIT != 0) return "Jumlah BBC harus kelipatan 1000"
+        if (Prefs.bbcMatchNick && Prefs.bbcNick.trim().isEmpty()) return "Isi nick dulu, atau matikan Cocokkan nick"
+        return null
+    }
+
+    fun bannerText(stopped: Boolean): String {
+        if (finished) return "Selesai, " + lastTarget + " BBC terkirim"
+        val s = Prefs.bbcPendSent
+        val t = Prefs.bbcPendTarget
+        if (exhausted) return "Server akun ini habis: terkirim " + s + " dari " + t + " BBC. Ganti akun lalu lanjutkan"
+        return "Berhenti: terkirim " + s + " dari " + t + " BBC"
+    }
+
+    private fun setupOrder(): Boolean {
+        val id = Prefs.bbcId.trim()
+        val amt = Prefs.bbcAmount
+        if (Prefs.bbcPendId == id && Prefs.bbcPendTarget > 0) {
+            if (Prefs.bbcPendSent >= amt) {
+                log("Pesanan ke ID " + id + " sudah terkirim " + Prefs.bbcPendSent + " BBC. Tidak ada yang dikirim")
+                Prefs.bbcClearPending()
+                return false
+            }
+            Prefs.bbcPendTarget = amt
+            log("Melanjutkan pesanan ke ID " + id + ": terkirim " + Prefs.bbcPendSent + " dari " + amt + " BBC")
+        } else {
+            Prefs.bbcPendId = id
+            Prefs.bbcPendTarget = amt
+            Prefs.bbcPendSent = 0
+            log("Pesanan baru ke ID " + id + ": 0 dari " + amt + " BBC")
+        }
+        lastTarget = amt
+        return true
+    }
+
+    // ---------- level server (hanya dibaca saat memilih server berikutnya) ----------
+
+    private fun rowLevel(s: Scr, row: Line): Int? {
+        val band = s.lines.filter { Math.abs(it.cy - row.cy) < s.h * 0.035f }
+        val right = band.maxByOrNull { it.r.right } ?: return null
+        val tok = right.text.trim().split(Regex("\\s+")).lastOrNull() ?: return null
+        val digits = tok.filter { it.isDigit() }
+        if (digits.isEmpty() || digits.length > 3) return null
+        return digits.toIntOrNull()
+    }
+
+    fun levelOk(name: String, s: Scr, row: Line): Boolean {
+        val min = Prefs.bbcMinLevel
+        val lv = rowLevel(s, row)
+        if (lv == null) {
+            if (levelWarned.add(name)) log("Level server " + name + " tidak terbaca, dianggap memenuhi")
+            return true
+        }
+        if (lv < min) {
+            log("Server " + name + " dilewati: level " + lv + " (minimal " + min + ")")
+            return false
+        }
+        return true
+    }
+
+    // ---------- alur utama ----------
+
+    fun main() {
+        val ctx = Engine.app ?: throw Engine.Stop("Aplikasi tidak siap")
+        Engine.gamePkg = Engine.findGame(ctx) ?: throw Engine.Stop("Game MLBB tidak ditemukan. Pilih game di Pengaturan.")
+        Engine.done.clear()
+        Engine.skipped.clear()
+        Engine.order.clear()
+        Engine.cur = null
+        Engine.acct = "-"
+        Engine.lastClaimed = null
+        Engine.firstPending = false
+        Engine.total = 0
+        Engine.doneCount = 0
+        finished = false
+        exhausted = false
+        levelWarned.clear()
+
+        if (!setupOrder()) {
+            finished = true
+            return
+        }
+
+        Engine.status = "Membuka game"
+        log("Mulai kirim BBC. Game: " + Engine.gamePkg)
+        Engine.launch()
+        Engine.sleepS(6.0)
+        Engine.awaitLobby(240)
+        Engine.settleLobby()
+
+        Engine.status = "Membaca akun dan daftar server"
+        val ls = Engine.openServerList()
+        val rc = Engine.readCurrent(ls) ?: throw Engine.Stop("Server awal tidak terbaca di Daftar Karakter")
+        Engine.cur = rc
+        if (Engine.acct == "-") {
+            log("Peringatan: ID akun tidak terbaca, server yang dipakai tidak diingat")
+        } else {
+            Engine.done.clear()
+            Engine.done.addAll(Prefs.bbcUsed(Engine.acct))
+        }
+        Engine.total = Prefs.serverCount
+        log("Server awal: " + rc + ", akun " + Engine.acct + ", server yang sudah dipakai kirim BBC: " + Engine.done.size)
+
+        var needLobby = true
+        var resetDone = false
+        var guard = 0
+        while (true) {
+            Engine.alive()
+            val cur = Engine.cur ?: throw Engine.Stop("Server saat ini tidak diketahui")
+            if (!Engine.done.contains(cur) && !Engine.skipped.contains(cur)) {
+                if (needLobby) {
+                    Engine.backToLobby()
+                    needLobby = false
+                }
+                sendOnServer(cur)
+                if (finished) break
+            } else {
+                log("Server " + cur + " sudah dipakai, dilewati")
+            }
+            guard++
+            if (guard > 80) throw Engine.Stop("Terlalu banyak server")
+            val next = Engine.pickNext()
+            if (next == null) {
+                if (!resetDone && Engine.acct != "-" && Prefs.bbcUsed(Engine.acct).size >= Prefs.serverCount) {
+                    resetDone = true
+                    Prefs.bbcClearUsed(Engine.acct)
+                    Engine.done.clear()
+                    Engine.skipped.clear()
+                    needLobby = true
+                    log("Semua server akun ini sudah pernah dipakai kirim BBC, ingatan direset")
+                    continue
+                }
+                exhausted = true
+                log("Server di akun ini habis. Terkirim " + Prefs.bbcPendSent + " dari " + Prefs.bbcPendTarget + " BBC")
+                break
+            }
+            Engine.switchTo(next)
+            Engine.cur = next
+            needLobby = false
+        }
+        Engine.finishAction()
+    }
+
+    // ---------- satu server pengirim ----------
+
+    private fun sendOnServer(name: String) {
+        Engine.status = "Kirim BBC di " + name
+        log("===== SERVER " + name + " (kirim BBC) =====")
+        val t0 = now()
+        try {
+            if (Prefs.bbcClaimFirst) {
+                Engine.status = "Klaim di " + name
+                Engine.claimEvents()
+                Engine.status = "Kirim BBC di " + name
+            }
+            ensureDiamonds()
+            closeSquadPopup()
+            openFriendDialog()
+            val before = firstRowSig(cap())
+            typeId(Prefs.bbcId.trim())
+            searchAndOpen(before)
+            openProfileFull()
+            val first = Prefs.bbcPendSent == 0
+            val ls = openLiveStream()
+            if (first) {
+                if (saveShot(ls.bmp, "before.png")) log("Screenshot before.png disimpan (Pictures/VGKlaim)")
+            }
+            sendYacht(ls)
+            val sentNow = Prefs.bbcPendSent + UNIT
+            Prefs.bbcPendSent = sentNow
+            Engine.done.add(name)
+            if (Engine.acct != "-") Prefs.bbcAddUsed(Engine.acct, name)
+            Engine.refreshCount()
+            log("Kiriman berhasil di " + name + ": terkirim " + sentNow + " dari " + Prefs.bbcPendTarget + " BBC (" + ((now() - t0) / 1000) + " dtk)")
+            // kembali ke profil
+            Engine.back()
+            waitFor(4000) { it.has("zonapribadi") }
+            if (sentNow >= Prefs.bbcPendTarget) {
+                val la = openLiveStream()
+                if (saveShot(la.bmp, "after.png")) log("Screenshot after.png disimpan (Pictures/VGKlaim)")
+                lastTarget = Prefs.bbcPendTarget
+                Prefs.bbcClearPending()
+                finished = true
+                log("SELESAI. Pesanan " + lastTarget + " BBC terkirim ke ID " + Prefs.bbcId.trim())
+            }
+            toLobby()
+        } catch (e: Skip) {
+            log("Server " + name + " dilewati: " + e.why)
+            Engine.skipped.add(name)
+            Engine.refreshCount()
+            toLobby()
+        }
+    }
+
+    // ---------- diamond ----------
+
+    private fun lobbyDiamonds(): Int {
+        val s = cap(Engine.R_TOP)
+        val nums = s.lines.filter {
+            it.norm.isNotEmpty() && it.norm.length <= 6 && it.norm.all { c -> c.isDigit() } &&
+                it.cx > s.w * 0.50f && it.cx < s.w * 0.74f
+        }
+        val l = nums.maxByOrNull { it.cx } ?: return -1
+        // Ikon di kiri angka: biru = diamond, emas = Vanguard Coin
+        val ix = (l.r.left - s.w * 0.014f).toInt()
+        var rr = 0
+        var bb = 0
+        var n = 0
+        for (dy in intArrayOf(-6, 0, 6)) {
+            for (dx in intArrayOf(-6, 0, 6)) {
+                val x = ix + dx
+                val y = l.cy.toInt() + dy
+                if (x < 0 || y < 0 || x >= s.bmp.width || y >= s.bmp.height) continue
+                val c = s.bmp.getPixel(x, y)
+                rr += (c shr 16) and 255
+                bb += c and 255
+                n++
+            }
+        }
+        if (n == 0) return -1
+        if ((bb - rr) / n <= 20) {
+            log("Bar atas lobby sedang menampilkan koin lain (bukan diamond)")
+            return -1
+        }
+        return l.norm.toIntOrNull() ?: -1
+    }
+
+    private fun ensureDiamonds() {
+        val d = lobbyDiamonds()
+        if (d >= UNIT) {
+            log("Diamond di lobby: " + d + ", tidak perlu Top Up")
+            return
+        }
+        log("Diamond di lobby: " + (if (d < 0) "tidak terbaca" else d.toString()) + ", ke menu Top Up")
+        for (round in 0 until 2) {
+            if (buyDiamonds() == 0) return
+            if (round == 1) throw Skip("Vanguard Coin belum cukup untuk kirim BBC")
+            log("Vanguard Coin tidak cukup, kembali ke lobby lalu klaim dulu")
+            Engine.backToLobby()
+            Engine.claimEvents()
+        }
+        throw Skip("Vanguard Coin belum cukup untuk kirim BBC")
+    }
+
+    private fun isTopUp(s: Scr): Boolean = s.has("keuntungantopup") && s.has("ganti")
+
+    private fun rpMode(s: Scr): Boolean = Regex("rp[0-9]{4,}").containsMatchIn(s.all)
+
+    // 0 = berhasil (diamond 1000 sudah masuk dan kembali di lobby), 1 = Vanguard Coin tidak cukup (masih di menu Top Up)
+    private fun buyDiamonds(): Int {
+        val l0 = cap()
+        tapXY(l0.w * 0.730f, l0.h * 0.054f, "tanda + di lobby (Top Up)")
+        var t = waitFor(7000) { isTopUp(it) } ?: throw Engine.Stop("Menu Top Up tidak terbuka")
+        // Harga harus dalam Vanguard Coin. Mode diamond menampilkan harga Rupiah ("Rp ...")
+        for (i in 0 until 3) {
+            if (!rpMode(t)) break
+            val g = t.lines.firstOrNull { it.norm == "ganti" } ?: t.find("ganti") ?: throw Engine.Stop("Tombol Ganti tidak terbaca di menu Top Up")
+            tapLine(g, "Ganti (harga Vanguard Coin)")
+            sleepMs(800)
+            t = cap()
+        }
+        if (rpMode(t)) throw Engine.Stop("Harga masih Rupiah setelah mengetuk Ganti")
+        val card = t.lines.firstOrNull { it.norm == "500diamond" }
+            ?: t.lines.firstOrNull { it.norm.length == 10 && lev(it.norm, "500diamond") <= 1 }
+            ?: throw Engine.Stop("Kartu 500 Diamond tidak ketemu di menu Top Up")
+        tapXY(card.cx + t.w * 0.034f, card.cy + t.h * 0.12f, "kartu 500 Diamond")
+        val d = waitFor(4500) { it.has("pemberitahuansistem", "lanjutkan") } ?: throw Engine.Stop("Dialog harga tidak muncul setelah memilih 500 Diamond")
+        val price = d.lines.firstOrNull { it.norm == "500" && it.cx > d.w * 0.45f && it.cx < d.w * 0.56f && it.cy > d.h * 0.38f && it.cy < d.h * 0.58f }
+        if (price == null) throw Engine.Stop("Harga di dialog bukan 500, tidak dikonfirmasi")
+        val kb = d.lines.firstOrNull { it.norm == "konfirmasi" } ?: d.find("konfirmasi") ?: throw Engine.Stop("Tombol Konfirmasi tidak terbaca")
+        tapLine(kb, "Konfirmasi (500 Diamond)")
+        val res = waitFor(6500) { it.has("tidakcukup") || it.has("memperolehhadiah") } ?: throw Engine.Stop("Hasil pembelian tidak dikenali")
+        if (res.has("tidakcukup")) return 1
+        Engine.waitOk()
+        // Popup Hadiah Top Up Pertama dan Skin Deluxe: tutup dengan X (yang kedua kadang tidak muncul)
+        sleepMs(900)
+        var clean = 0
+        for (i in 0 until 8) {
+            Engine.alive()
+            val s2 = cap()
+            if (s2.has("pilihhadiah", "topupsekarang", "skindeluxe")) {
+                clean = 0
+                tapXY(s2.w * 0.858f, s2.h * 0.076f, "tutup X (popup Top Up)")
+                sleepMs(600)
+            } else {
+                clean++
+                if (clean >= 2) break
+                sleepMs(600)
+            }
+        }
+        log("Top Up 500 Diamond selesai")
+        Engine.backToLobby()
+        return 0
+    }
+
+    // ---------- Squad, cari akun, profil ----------
+
+    private fun closeSquadPopup() {
+        var s = cap()
+        if (!s.has("squadtersedia")) return
+        log("Popup Sekarang Squad Tersedia ada, dihilangkan")
+        tapXY(s.w * 0.933f, s.h * 0.681f, "ikon Squad")
+        var lobbyWaits = 0
+        for (i in 0 until 14) {
+            sleepMs(700)
+            s = cap()
+            val lobby = Engine.isLobby(s) && !Engine.eventOpen(s)
+            if (lobby && !s.has("squadtersedia")) return
+            if (lobby) {
+                lobbyWaits++
+                if (lobbyWaits == 4) tapXY(s.w * 0.933f, s.h * 0.681f, "ikon Squad (ulang)")
+                continue
+            }
+            Engine.back()
+        }
+    }
+
+    private fun openFriendDialog() {
+        for (att in 0 until 3) {
+            val s = cap()
+            if (s.has("tambahkanteman") && s.has("cariid")) return
+            tapXY(s.w * 0.893f, s.h * 0.679f, "ikon orang + (tambah teman)")
+            if (waitFor(3500) { it.has("tambahkanteman") } != null) return
+        }
+        throw Engine.Stop("Dialog Tambahkan Teman tidak terbuka")
+    }
+
+    private fun typeId(id: String) {
+        val s0 = cap()
+        val box = s0.lines.firstOrNull { it.norm.contains("ketukuntuk") }
+        tapXY(box?.cx ?: (s0.w * 0.298f), box?.cy ?: (s0.h * 0.222f), "kotak ID")
+        sleepMs(900)
+        val svc = ClaimService.inst ?: throw Engine.Stop("Layanan Aksesibilitas tidak aktif")
+        val r = svc.inputText(id)
+        log("Isi ID lewat Aksesibilitas: " + r)
+        sleepMs(600)
+        if (cap().all.contains(id)) {
+            log("ID terisi (terbaca di layar)")
+            return
+        }
+        log("ID belum terbaca di layar, mencoba lewat tombol angka papan ketik")
+        if (typeByKeyboard(id)) {
+            sleepMs(400)
+            if (cap().all.contains(id)) {
+                log("ID terisi lewat papan ketik")
+                return
+            }
+        }
+        throw Engine.Stop("Tidak bisa mengisi kotak ID. Kirim log ke Claude")
+    }
+
+    private fun typeByKeyboard(id: String): Boolean {
+        val s = cap()
+        val pos = HashMap<Char, Pair<Float, Float>>()
+        for (l in s.lines) {
+            if (l.cy < s.h * 0.50f) continue
+            if (l.norm.length == 1 && l.norm[0].isDigit()) pos[l.norm[0]] = Pair(l.cx, l.cy)
+        }
+        val row = s.lines.firstOrNull { it.cy > s.h * 0.50f && (it.norm.contains("1234567890") || it.norm.contains("123456789")) }
+        val count = if (row != null && row.norm.contains("1234567890")) 10 else 9
+        for (ch in id) {
+            var p = pos[ch]
+            if (p == null && row != null) {
+                val idx = "1234567890".indexOf(ch)
+                if (idx in 0 until count) p = Pair(row.r.left + (idx + 0.5f) * row.r.width() / count, row.cy)
+            }
+            if (p == null) {
+                log("Tombol angka " + ch + " tidak ditemukan di papan ketik")
+                return false
+            }
+            tapXY(p.first, p.second, "ketik " + ch)
+        }
+        return true
+    }
+
+    // Baris teratas hasil pencarian (nama, tanpa level dan status online)
+    private fun rowCands(s: Scr): List<Line> = s.lines.filter {
+        it.cy > s.h * 0.27f && it.cy < s.h * 0.46f && it.cx > s.w * 0.20f && it.cx < s.w * 0.72f &&
+            !it.norm.contains("terakhir") && !it.norm.contains("online") && it.norm.length >= 2 &&
+            !it.norm.all { c -> c.isDigit() }
+    }.sortedBy { it.r.left }
+
+    private fun firstRowSig(s: Scr): String = rowCands(s).joinToString("|") { it.norm }
+
+    private fun searchAndOpen(beforeSig: String) {
+        val s = cap()
+        val cb = s.lines.firstOrNull { it.norm == "cariid" } ?: s.find("cariid") ?: throw Engine.Stop("Tombol Cari ID tidak terbaca")
+        tapLine(cb, "Cari ID")
+        var changed = false
+        val t0 = now()
+        while (now() - t0 < 8000) {
+            Engine.alive()
+            sleepMs(500)
+            if (firstRowSig(cap()) != beforeSig) {
+                changed = true
+                break
+            }
+        }
+        if (!changed) throw Engine.Stop("Hasil pencarian tidak berubah: ID tidak ditemukan atau Cari ID tidak terketuk")
+        sleepMs(700)
+        val fin = cap()
+        val texts = rowCands(fin).map { it.text }
+        log("Hasil teratas pencarian: " + texts.joinToString(" | "))
+        if (Prefs.bbcMatchNick && !nickMatch(texts, Prefs.bbcNick)) {
+            throw Engine.Stop("Nick hasil teratas (" + texts.joinToString(" ") + ") tidak cocok dengan " + Prefs.bbcNick.trim() + ". Pengiriman dihentikan")
+        }
+        tapXY(fin.w * 0.417f, fin.h * 0.361f, "akun hasil teratas")
+    }
+
+    private fun openProfileFull() {
+        val card = waitFor(6500) { it.has("seasonsaatini") } ?: throw Engine.Stop("Kartu profil tidak terbuka setelah mengetuk akun")
+        sleepMs(500)
+        tapXY(card.w * 0.717f, card.h * 0.736f, "ikon pencarian (profil lengkap)")
+        val prof = waitFor(7000) { it.has("zonapribadi") } ?: throw Engine.Stop("Halaman Zona Pribadi tidak terbuka")
+        if (Prefs.bbcMatchNick) {
+            val head = prof.lines.filter { it.cy < prof.h * 0.10f && it.cx > prof.w * 0.15f }.map { it.text }
+            if (!nickMatch(head, Prefs.bbcNick)) {
+                throw Engine.Stop("Nick di Zona Pribadi (" + head.joinToString(" ") + ") tidak cocok dengan " + Prefs.bbcNick.trim() + ". Pengiriman dihentikan")
+            }
+        }
+    }
+
+    private fun openLiveStream(): Scr {
+        val s = cap()
+        val l = s.lines.firstOrNull { it.norm.contains("livestream") && it.cx < s.w * 0.20f } ?: throw Engine.Stop("Menu Live Stream tidak terbaca")
+        tapLine(l, "menu Live Stream")
+        return waitFor(6500) { it.has("catatanlivestream") } ?: throw Engine.Stop("Halaman Live Stream tidak terbuka")
+    }
+
+    private fun panelDiamonds(s: Scr): Int? {
+        val l = s.lines.firstOrNull {
+            it.cy > s.h * 0.88f && it.cx > s.w * 0.40f && it.cx < s.w * 0.65f && it.norm.isNotEmpty() &&
+                it.norm.length <= 6 && it.norm.all { c -> c.isDigit() }
+        }
+        return l?.norm?.toIntOrNull()
+    }
+
+    // ---------- kirim Yacht ----------
+
+    private fun sendYacht(ls: Scr) {
+        val tn = ls.lines.filter { it.norm == "tonton" && it.cx > ls.w * 0.60f }.maxByOrNull { it.cy }
+            ?: throw Engine.Stop("Tombol Tonton tidak terbaca")
+        tapLine(tn, "Tonton")
+        waitFor(7000) { it.has("trendingpoint") } ?: throw Engine.Stop("Halaman Channel tidak terbuka")
+        var gp: Scr? = null
+        for (att in 0 until 2) {
+            val s = cap()
+            tapXY(s.w * 0.866f, s.h * 0.946f, "ikon hadiah")
+            gp = waitFor(4500) { it.has("yacht") && it.has("airplane") }
+            if (gp != null) break
+        }
+        val g = gp ?: throw Engine.Stop("Daftar hadiah (Yacht) tidak muncul")
+        val y = g.lines.firstOrNull { it.norm == "yacht" } ?: g.find("yacht") ?: throw Engine.Stop("Tulisan Yacht tidak terbaca")
+        val before = panelDiamonds(g)
+        tapXY(y.cx, y.cy - g.h * 0.055f, "Yacht (1000 diamond)")
+        val d = waitFor(4000) { it.has("berihadiah") || it.has("mencapailv") } ?: throw Engine.Stop("Dialog Beri Hadiah tidak muncul")
+        if (d.has("mencapailv") && !d.has("berihadiah")) throw Skip("level server belum cukup (Mencapai Lv ... untuk mengirim)")
+        if (!d.has("kirimyacht")) throw Engine.Stop("Dialog Beri Hadiah bukan Yacht, tidak dikonfirmasi")
+        val kb = d.lines.filter { it.norm == "konfirmasi" && it.cy > d.h * 0.60f }.firstOrNull() ?: d.find("konfirmasi") ?: throw Engine.Stop("Tombol Konfirmasi hadiah tidak terbaca")
+        tapLine(kb, "Konfirmasi (kirim Yacht)")
+        sleepMs(1500)
+        var after = cap()
+        if (after.has("berihadiah")) {
+            sleepMs(1500)
+            after = cap()
+        }
+        if (after.has("berihadiah")) throw Engine.Stop("Dialog Beri Hadiah belum tertutup setelah Konfirmasi")
+        log("Diamond di panel hadiah: sebelum " + (before ?: -1) + ", sesudah " + (panelDiamonds(after) ?: -1))
+    }
+
+    // ---------- kembali ke lobby ----------
+
+    private fun toLobby() {
+        for (i in 0 until 10) {
+            Engine.alive()
+            val s = cap()
+            val lobby = Engine.isLobby(s) && !Engine.eventOpen(s)
+            if (lobby && !s.has("seasonsaatini", "telahmengirimkanlike", "tambahkanteman")) return
+            Engine.back()
+            sleepMs(450)
+        }
+        Engine.backToLobby()
+    }
+
+    // ---------- pencocokan nick ----------
+
+    private fun normNick(t: String): String {
+        val d = Normalizer.normalize(t, Normalizer.Form.NFD)
+        return d.replace(Regex("\\p{M}+"), "").lowercase().filter { it.isLetterOrDigit() }
+    }
+
+    private fun lev(a: String, b: String): Int {
+        val dp = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            var prev = dp[0]
+            dp[0] = i
+            for (j in 1..b.length) {
+                val tmp = dp[j]
+                dp[j] = minOf(dp[j] + 1, dp[j - 1] + 1, prev + (if (a[i - 1] == b[j - 1]) 0 else 1))
+                prev = tmp
+            }
+        }
+        return dp[b.length]
+    }
+
+    // Tanpa memperhatikan aksen dan huruf besar-kecil; kemiripan minimal 80%
+    private fun nickMatch(texts: List<String>, want: String): Boolean {
+        val b = normNick(want)
+        if (b.isEmpty()) return true
+        val joined = normNick(texts.joinToString(""))
+        if (b.length >= 3 && joined.contains(b)) return true
+        for (t in texts) {
+            val a = normNick(t)
+            if (a.length < 2) continue
+            val sim = 1.0 - lev(a, b).toDouble() / maxOf(a.length, b.length)
+            if (sim >= 0.8) return true
+        }
+        return false
+    }
+
+    // ---------- screenshot before / after ----------
+
+    private fun saveShot(bmp: Bitmap, name: String): Boolean {
+        val ctx = Engine.app ?: return false
+        try {
+            val res = ctx.contentResolver
+            try {
+                res.delete(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    MediaStore.Images.Media.DISPLAY_NAME + "=? AND " + MediaStore.Images.Media.RELATIVE_PATH + " LIKE ?",
+                    arrayOf(name, "Pictures/VGKlaim%")
+                )
+            } catch (_: Throwable) {
+            }
+            val cv = ContentValues()
+            cv.put(MediaStore.Images.Media.DISPLAY_NAME, name)
+            cv.put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            cv.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/VGKlaim")
+            val uri = res.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return false
+            res.openOutputStream(uri)?.use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            return true
+        } catch (e: Throwable) {
+            log("Gagal menyimpan " + name + ": " + e.javaClass.simpleName)
+            return false
+        }
+    }
+}
