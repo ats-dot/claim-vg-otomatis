@@ -744,7 +744,7 @@ class MainActivity : Activity() {
         "Baterai" to "Atur ke tanpa batasan supaya sistem tidak membatasi kecepatan baca layar.",
         "Aplikasi game" to "Pilih aplikasi Mobile Legends yang dibuka bot.",
         "Jumlah server" to "Isi jumlah semua server akun ini, termasuk server yang sedang dipakai (awalnya 20). Wajib diisi. Bot terus mencari sampai semua server terlihat, dan tidak berhenti sebelum itu.",
-        "Setelah selesai" to "Yang dilakukan bot setelah semua server selesai. VG Klaim dan Home menutup game. Tetap di game tidak menutupnya. Banner hasil klaim selalu tampil.",
+        "Setelah selesai" to "Yang dilakukan bot setelah semua server selesai. VG Klaim: langsung membuka VG Klaim. Home: langsung ke layar Home. Tetap di game: kembali ke lobby dan tetap di game. Game tidak ditutup dan tidak dibuang dari Recents. Banner hasil klaim selalu tampil.",
         "Lewati server di atas posisi sekarang" to "Server yang urutannya di atas server awal dianggap sudah selesai dan tidak diklaim.",
         "Titik melayang saat klaim" to "Titik tak terlihat yang membuat baca layar sekitar 10 kali lebih cepat. Gayanya dipilih lewat Diagnosa umum.",
         "Jeda antar langkah" to "Lama bot menunggu setelah tiap ketukan sebelum melihat layar lagi, dalam milidetik. 0 berarti tanpa jeda.",
