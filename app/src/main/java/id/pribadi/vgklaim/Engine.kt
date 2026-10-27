@@ -1878,6 +1878,7 @@ object Engine {
         }
     }
 
+    private val menuAge = listOf("verifikasiusia")
     private val panelAge = listOf("verifikasiusia", "penghubunganakun", "orangtua", "satukali")
 
     // Tombol "Klaim Semua": emas = siap, abu-abu = sudah diklaim. Diukur dari warna di kiri dan kanan tulisan.
@@ -1909,14 +1910,12 @@ object Engine {
     // Klaim Verifikasi Usia (sekali per server): menu Verifikasi Usia, Klaim Semua, Gunakan sekarang,
     // geser peti ke kiri sampai kartu Vanguard Coin, tombol + lalu Konfirmasi, lalu OK. Bisa dimatikan di Pengaturan.
     private fun claimAge() {
-        val mm = cap(R_MENU)
-        val ml = mm.find("verifikasiusia")
-        if (ml == null) {
+        // Menu Verifikasi Usia bisa di atas atau di bawah daftar menu: baca dari atas, kalau tidak ketemu geser turun sekali lalu baca lagi
+        val m = openMenuQuick(menuAge, panelAge)
+        if (m == null) {
             log("Verifikasi Usia: menu tidak ada, lanjut")
             return
         }
-        tapLine(ml, "menu verifikasi usia")
-        val m = waitPanel(panelAge)
         val b = m.exact("klaimsemua") ?: m.find("klaimsemua")
         if (b == null) {
             log("Verifikasi Usia: tombol Klaim Semua tidak terbaca, lanjut")
