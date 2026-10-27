@@ -32,14 +32,26 @@ object BbcEngine {
     private fun now(): Long = Engine.now()
     private fun sleepMs(ms: Long) = Engine.sleepMs(ms)
     private fun cap(r: Engine.Reg? = null): Scr = Engine.cap(r)
-    private fun tapXY(x: Float, y: Float, why: String) = Engine.tapXY(x, y, why, true)
-    private fun tapLine(l: Line, why: String) = Engine.tapXY(l.cx, l.cy, why, true)
+    private fun tapXY(x: Float, y: Float, why: String) = quickTap(x, y, why)
+    private fun tapLine(l: Line, why: String) = quickTap(l.cx, l.cy, why)
 
-    // Ketukan langsung tanpa jeda antar langkah
+    // Ketukan satu kali, langsung, tanpa jeda antar langkah dan tanpa diulang
     private fun quickTap(x: Float, y: Float, why: String) {
         Engine.alive()
         log("Ketuk: " + why)
-        ClaimService.inst?.tap(x, y)
+        val svc = ClaimService.inst ?: throw Engine.Stop("Layanan Aksesibilitas tidak aktif")
+        if (!svc.tap(x, y)) log("KETUKAN GAGAL (" + why + "): " + svc.lastGestureFail)
+    }
+
+    // Tekan Back lalu tunggu sampai isi layar berubah (maksimal 2 detik)
+    private fun backAndWait(prevAll: String) {
+        Engine.back()
+        val t0 = now()
+        while (now() - t0 < 2000) {
+            Engine.alive()
+            if (cap().all != prevAll) return
+            sleepMs(40)
+        }
     }
 
     private fun waitFor(maxMs: Long, pred: (Scr) -> Boolean): Scr? {
@@ -144,7 +156,26 @@ object BbcEngine {
 
     // ---------- alur utama ----------
 
+    // Kalau berhenti karena masalah (bukan karena tombol Berhenti), simpan screenshot layar saat itu
     fun main() {
+        try {
+            run()
+        } catch (e: Engine.Stop) {
+            val m = e.message ?: ""
+            if (m != "Dihentikan") captureProblem(m)
+            throw e
+        }
+    }
+
+    private fun captureProblem(msg: String) {
+        try {
+            val s = cap()
+            if (saveShot(s.bmp, "masalah.png")) log("Screenshot masalah.png disimpan (Pictures/VGKlaim). Masalah: " + msg)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun run() {
         val ctx = Engine.app ?: throw Engine.Stop("Aplikasi tidak siap")
         Engine.gamePkg = Engine.findGame(ctx) ?: throw Engine.Stop("Game MLBB tidak ditemukan. Pilih game di Pengaturan.")
         Engine.done.clear()
@@ -282,6 +313,7 @@ object BbcEngine {
         Engine.status = "Kirim BBC di " + label
         log("===== SERVER " + label + " (kirim BBC) =====")
         val t0 = now()
+        Engine.serverT0 = t0
         if (Engine.acct != "-") Prefs.bbcSetTry(Engine.acct, name ?: "?")
         try {
             // Level dicek di lobby HANYA untuk server pertama di akun ini (server awal). Server berikutnya sudah dicek
@@ -309,7 +341,7 @@ object BbcEngine {
             val cari = dlg.lines.first { it.norm.contains("cariid") }
             val before = firstRowSig(dlg)
             quickTap(cari.cx, cari.cy, "Cari ID")
-            searchAndOpen(before, cari)
+            searchAndOpen(before)
             openProfileFull()
             val first = Prefs.bbcPendSent == 0
             openLiveStream(if (first) "before.png" else null, true)
@@ -450,27 +482,13 @@ object BbcEngine {
         val l0 = cap()
         tapXY(l0.w * 0.730f, l0.h * 0.054f, "tanda + di lobby (Top Up)")
         var t = waitFor(7000) { isTopUp(it) } ?: throw Engine.Stop("Menu Top Up tidak terbuka")
-        // Harga harus dalam Vanguard Coin. Mode diamond menampilkan harga Rupiah ("Rp ..."). Tunggu halaman tenang,
-        // ketuk Ganti SEKALI, lalu tunggu harganya berubah (jangan mengetuk berulang karena bisa membalikkan lagi)
-        sleepMs(600)
-        t = cap()
+        // Harga harus dalam Vanguard Coin (mode diamond menampilkan harga Rupiah "Rp ..."). Ketuk Ganti SEKALI,
+        // lalu tunggu sampai harganya berubah
         if (rpMode(t)) {
             val g = t.lines.firstOrNull { it.norm == "ganti" } ?: t.find("ganti") ?: throw Engine.Stop("Tombol Ganti tidak terbaca di menu Top Up")
             tapLine(g, "Ganti (harga Vanguard Coin)")
-            val tg = now()
-            while (now() - tg < 3000 && rpMode(t)) {
-                Engine.alive()
-                sleepMs(300)
-                t = cap()
-            }
-            if (rpMode(t)) {
-                val g2 = t.lines.firstOrNull { it.norm == "ganti" } ?: t.find("ganti") ?: throw Engine.Stop("Tombol Ganti tidak terbaca di menu Top Up")
-                tapLine(g2, "Ganti (ulang)")
-                sleepMs(1200)
-                t = cap()
-            }
+            t = waitFor(4000) { !rpMode(it) && isTopUp(it) } ?: throw Engine.Stop("Harga masih Rupiah setelah mengetuk Ganti")
         }
-        if (rpMode(t)) throw Engine.Stop("Harga masih Rupiah setelah mengetuk Ganti")
         val card = t.lines.firstOrNull { it.norm == "500diamond" }
             ?: t.lines.firstOrNull { it.norm.length == 10 && lev(it.norm, "500diamond") <= 1 }
             ?: throw Engine.Stop("Kartu 500 Diamond tidak ketemu di menu Top Up")
@@ -527,34 +545,26 @@ object BbcEngine {
         if (!s.has("squadtersedia")) return
         log("Popup Sekarang Squad Tersedia ada, dihilangkan")
         tapXY(s.w * 0.933f, s.h * 0.681f, "ikon Squad")
-        var lobbyWaits = 0
-        for (i in 0 until 14) {
-            sleepMs(700)
+        for (i in 0 until 40) {
+            Engine.alive()
             s = cap()
             val lobby = Engine.isLobby(s) && !Engine.eventOpen(s)
             if (lobby && !s.has("squadtersedia")) return
             if (lobby) {
-                lobbyWaits++
-                if (lobbyWaits == 4) tapXY(s.w * 0.933f, s.h * 0.681f, "ikon Squad (ulang)")
+                sleepMs(60)
                 continue
             }
-            Engine.back()
+            backAndWait(s.all)
         }
     }
 
     private fun openFriendDialog() {
-        for (att in 0 until 14) {
-            Engine.alive()
-            val s = cap()
-            if (s.has("tambahkanteman") && s.has("cariid")) return
-            if (Engine.isLobby(s) && !Engine.eventOpen(s) && !s.has("squadtersedia")) {
-                quickTap(s.w * 0.893f, s.h * 0.679f, "ikon orang + (tambah teman)")
-                if (waitFor(3500) { it.has("tambahkanteman") } != null) return
-            } else {
-                sleepMs(100)
-            }
-        }
-        throw Engine.Stop("Dialog Tambahkan Teman tidak terbuka")
+        val s = waitFor(8000) { sc ->
+            (sc.has("tambahkanteman") && sc.has("cariid")) || (Engine.isLobby(sc) && !Engine.eventOpen(sc) && !sc.has("squadtersedia"))
+        } ?: throw Engine.Stop("Lobby tidak siap untuk membuka dialog teman")
+        if (s.has("tambahkanteman") && s.has("cariid")) return
+        quickTap(s.w * 0.893f, s.h * 0.679f, "ikon orang + (tambah teman)")
+        waitFor(6000) { it.has("tambahkanteman") } ?: throw Engine.Stop("Dialog Tambahkan Teman tidak terbuka")
     }
 
     private fun typeId(id: String) {
@@ -695,27 +705,9 @@ object BbcEngine {
 
     private fun firstRowSig(s: Scr): String = rowCands(s).joinToString("|") { it.norm }
 
-    // Cari ID sudah diketuk tepat sesudah OKE. Tunggu hasilnya berubah; kalau belum, ketuk Cari ID lagi (maksimal 3 kali)
-    private fun searchAndOpen(beforeSig: String, cari: Line) {
-        var changed = false
-        var taps = 1
-        var lastTap = now()
-        val t0 = now()
-        while (now() - t0 < 9000) {
-            Engine.alive()
-            sleepMs(250)
-            if (firstRowSig(cap()) != beforeSig) {
-                changed = true
-                break
-            }
-            if (taps < 3 && now() - lastTap > 1500) {
-                quickTap(cari.cx, cari.cy, "Cari ID (ulang)")
-                taps++
-                lastTap = now()
-            }
-        }
-        if (!changed) throw Engine.Stop("Hasil pencarian tidak berubah: ID tidak ditemukan atau Cari ID tidak terketuk")
-        sleepMs(500)
+    // Cari ID sudah diketuk (satu kali). Tunggu daftar berubah, lalu baca hasil teratas
+    private fun searchAndOpen(beforeSig: String) {
+        waitFor(9000) { firstRowSig(it) != beforeSig } ?: throw Engine.Stop("Hasil pencarian tidak berubah: ID tidak ditemukan atau Cari ID tidak terketuk")
         val fin = cap()
         val texts = rowCands(fin).map { it.text }
         log("Hasil teratas pencarian: " + texts.joinToString(" | "))
@@ -727,16 +719,12 @@ object BbcEngine {
 
     private fun openProfileFull() {
         val card = waitFor(6500) { it.has("seasonsaatini") } ?: throw Engine.Stop("Kartu profil tidak terbuka setelah mengetuk akun")
-        var prof: Scr? = null
-        for (att in 0 until 3) {
-            quickTap(card.w * 0.717f, card.h * 0.736f, "ikon pencarian (profil lengkap)")
-            prof = waitFor(2000) { it.has("zonapribadi") }
-            if (prof != null) break
-        }
-        if (prof == null) throw Engine.Stop("Halaman Zona Pribadi tidak terbuka")
+        quickTap(card.w * 0.717f, card.h * 0.736f, "ikon pencarian (profil lengkap)")
+        val prof = waitFor(7000) { it.has("zonapribadi") } ?: throw Engine.Stop("Halaman Zona Pribadi tidak terbuka")
         if (Prefs.bbcMatchNick) {
-            val head = prof.lines.filter { it.cy < prof.h * 0.10f && it.cx > prof.w * 0.15f }.map { it.text }
-            if (!nickMatch(head, Prefs.bbcNick)) {
+            // Judul "Zona Pribadi <nick>" dan nama besar di bawahnya; kata "Zona Pribadi" dan "Pengaturan" dibuang
+            val head = prof.lines.filter { it.cy < prof.h * 0.22f && it.cx > prof.w * 0.15f }.map { it.text }
+            if (!nickInText(head, Prefs.bbcNick)) {
                 throw Engine.Stop("Nick di Zona Pribadi (" + head.joinToString(" ") + ") tidak cocok dengan " + Prefs.bbcNick.trim() + ". Pengiriman dihentikan")
             }
         }
@@ -778,37 +766,20 @@ object BbcEngine {
     // ---------- kirim Yacht ----------
 
     private fun sendYacht() {
-        waitFor(7000) { it.has("trendingpoint") } ?: throw Engine.Stop("Halaman Channel tidak terbuka")
-        var gp: Scr? = null
-        for (att in 0 until 2) {
-            val s = cap()
-            tapXY(s.w * 0.866f, s.h * 0.946f, "ikon hadiah")
-            gp = waitFor(4500) { it.has("yacht") && it.has("airplane") }
-            if (gp != null) break
-        }
-        val g = gp ?: throw Engine.Stop("Daftar hadiah (Yacht) tidak muncul")
+        val ch = waitFor(7000) { it.has("trendingpoint") } ?: throw Engine.Stop("Halaman Channel tidak terbuka")
+        quickTap(ch.w * 0.866f, ch.h * 0.946f, "ikon hadiah")
+        val g = waitFor(6000) { it.has("yacht") && it.has("airplane") } ?: throw Engine.Stop("Daftar hadiah (Yacht) tidak muncul")
         val y = g.lines.firstOrNull { it.norm == "yacht" } ?: g.find("yacht") ?: throw Engine.Stop("Tulisan Yacht tidak terbaca")
         val before = panelDiamonds(g)
         // Dua kemungkinan yang tidak pernah muncul bersamaan: dialog Beri Hadiah (level cukup) atau tulisan
         // "Mencapai Lv ... untuk mengirim!" tanpa dialog (level kurang, server dilewati)
-        var d: Scr? = null
-        for (att in 0 until 2) {
-            tapXY(y.cx, y.cy - g.h * 0.055f, "Yacht (1000 diamond)")
-            d = waitFor(3500) { it.has("berihadiah") || it.has("mencapailv") }
-            if (d != null) break
-        }
-        if (d == null) throw Engine.Stop("Dialog Beri Hadiah tidak muncul")
+        quickTap(y.cx, y.cy - g.h * 0.055f, "Yacht (1000 diamond)")
+        val d = waitFor(5000) { it.has("berihadiah") || it.has("mencapailv") } ?: throw Engine.Stop("Dialog Beri Hadiah tidak muncul")
         if (d.has("mencapailv") && !d.has("berihadiah")) throw Skip("level server belum cukup (Mencapai Lv ... untuk mengirim)")
         if (!d.has("kirimyacht")) throw Engine.Stop("Dialog Beri Hadiah bukan Yacht, tidak dikonfirmasi")
         val kb = d.lines.filter { it.norm == "konfirmasi" && it.cy > d.h * 0.60f }.firstOrNull() ?: d.find("konfirmasi") ?: throw Engine.Stop("Tombol Konfirmasi hadiah tidak terbaca")
-        tapLine(kb, "Konfirmasi (kirim Yacht)")
-        sleepMs(1500)
-        var after = cap()
-        if (after.has("berihadiah")) {
-            sleepMs(1500)
-            after = cap()
-        }
-        if (after.has("berihadiah")) throw Engine.Stop("Dialog Beri Hadiah belum tertutup setelah Konfirmasi")
+        quickTap(kb.cx, kb.cy, "Konfirmasi (kirim Yacht)")
+        val after = waitFor(5000) { !it.has("berihadiah") } ?: throw Engine.Stop("Dialog Beri Hadiah belum tertutup setelah Konfirmasi")
         log("Diamond di panel hadiah: sebelum " + (before ?: -1) + ", sesudah " + (panelDiamonds(after) ?: -1))
     }
 
@@ -820,8 +791,7 @@ object BbcEngine {
             val s = cap()
             val lobby = Engine.isLobby(s) && !Engine.eventOpen(s)
             if (lobby && !s.has("seasonsaatini", "telahmengirimkanlike", "tambahkanteman")) return
-            Engine.back()
-            sleepMs(450)
+            backAndWait(s.all)
         }
         Engine.backToLobby()
     }
@@ -845,6 +815,24 @@ object BbcEngine {
             }
         }
         return dp[b.length]
+    }
+
+    // Cari nick di dalam teks yang bercampur kata lain: kata judul dibuang, lalu cocokkan sebagian tulisan (kemiripan minimal 80%)
+    private fun nickInText(texts: List<String>, want: String): Boolean {
+        val b = normNick(want)
+        if (b.length < 2) return true
+        val hay = normNick(texts.joinToString(" ")).replace("zonapribadi", "").replace("pengaturan", "")
+        if (hay.contains(b)) return true
+        for (len in maxOf(2, b.length - 1)..(b.length + 1)) {
+            var i = 0
+            while (i + len <= hay.length) {
+                val sub = hay.substring(i, i + len)
+                val sim = 1.0 - lev(sub, b).toDouble() / maxOf(sub.length, b.length)
+                if (sim >= 0.8) return true
+                i++
+            }
+        }
+        return false
     }
 
     // Tanpa memperhatikan aksen dan huruf besar-kecil; kemiripan minimal 80%
