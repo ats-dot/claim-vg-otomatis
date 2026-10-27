@@ -727,7 +727,10 @@ object BbcEngine {
         val s = cap()
         val l = s.lines.firstOrNull { it.norm.contains("livestream") && it.cx < s.w * 0.20f } ?: throw Engine.Stop("Menu Live Stream tidak terbaca")
         tapLine(l, "menu Live Stream")
-        return waitFor(6500) { it.has("catatanlivestream") } ?: throw Engine.Stop("Halaman Live Stream tidak terbuka")
+        waitFor(6500) { it.has("catatanlivestream") } ?: throw Engine.Stop("Halaman Live Stream tidak terbuka")
+        // Beri waktu angka dan tombol Tonton selesai dimuat, lalu baca layar yang baru (dipakai juga untuk before/after.png)
+        sleepMs(800)
+        return cap()
     }
 
     private fun panelDiamonds(s: Scr): Int? {
