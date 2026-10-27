@@ -277,6 +277,24 @@ object Prefs {
     }
 
     fun bbcClearUsed(acct: String) {
-        s().edit().remove("bbc_used_" + acct).apply()
+        s().edit().remove("bbc_used_" + acct).remove("bbc_last_" + acct).remove("bbc_try_" + acct).apply()
+    }
+
+    // Percobaan kirim yang belum selesai di akun ini: nama server, "?" (nama belum diketahui), atau "!" (sudah terkirim, nama belum tercatat)
+    fun bbcTry(acct: String): String = s().getString("bbc_try_" + acct, "") ?: ""
+
+    fun bbcSetTry(acct: String, v: String) {
+        s().edit().putString("bbc_try_" + acct, v).apply()
+    }
+
+    fun bbcClearTry(acct: String) {
+        s().edit().remove("bbc_try_" + acct).apply()
+    }
+
+    // Server terakhir yang dipakai kirim BBC: game membuka server ini lagi saat dijalankan berikutnya
+    fun bbcLast(acct: String): String = s().getString("bbc_last_" + acct, "") ?: ""
+
+    fun bbcSetLast(acct: String, name: String) {
+        s().edit().putString("bbc_last_" + acct, name).apply()
     }
 }
