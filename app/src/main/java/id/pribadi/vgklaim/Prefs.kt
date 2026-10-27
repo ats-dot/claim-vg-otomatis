@@ -49,11 +49,6 @@ object Prefs {
         get() = s().getInt("step_ms", 400)
         set(v) { s().edit().putInt("step_ms", v.coerceIn(0, 3000)).apply() }
 
-    // Jenis Diagnosa: 0 umum/OCR, 1 geser daftar
-    var diagMode: Int
-        get() = s().getInt("diag_mode", 0)
-        set(v) { s().edit().putInt("diag_mode", v).apply() }
-
     var swipeHardMs: Int
         get() = s().getInt("swipe_hard_ms", 150)
         set(v) { s().edit().putInt("swipe_hard_ms", v.coerceIn(40, 400)).apply() }
