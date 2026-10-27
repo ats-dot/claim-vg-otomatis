@@ -303,16 +303,16 @@ object BbcEngine {
             ensureDiamonds()
             closeSquadPopup()
             openFriendDialog()
-            val before = firstRowSig(cap())
+            val d0 = cap()
+            val before = firstRowSig(d0)
+            val cari = d0.lines.firstOrNull { it.norm == "cariid" } ?: d0.find("cariid") ?: throw Engine.Stop("Tombol Cari ID tidak terbaca")
             typeId(Prefs.bbcId.trim())
-            searchAndOpen(before)
+            quickTap(cari.cx, cari.cy, "Cari ID")
+            searchAndOpen(before, cari)
             openProfileFull()
             val first = Prefs.bbcPendSent == 0
-            val ls = openLiveStream()
-            if (first) {
-                if (saveShot(ls.bmp, "before.png")) log("Screenshot before.png disimpan (Pictures/VGKlaim)")
-            }
-            sendYacht(ls)
+            openLiveStream(if (first) "before.png" else null, true)
+            sendYacht()
             val sentNow = Prefs.bbcPendSent + UNIT
             Prefs.bbcPendSent = sentNow
             // Catat segera supaya tidak hilang kalau proses berhenti sesudah ini
@@ -327,8 +327,7 @@ object BbcEngine {
             Engine.back()
             waitFor(4000) { it.has("zonapribadi") }
             if (sentNow >= Prefs.bbcPendTarget) {
-                val la = openLiveStream()
-                if (saveShot(la.bmp, "after.png")) log("Screenshot after.png disimpan (Pictures/VGKlaim)")
+                openLiveStream("after.png", false)
                 lastTarget = Prefs.bbcPendTarget
                 Prefs.bbcClearPending()
                 finished = true
@@ -476,7 +475,11 @@ object BbcEngine {
             ?: throw Engine.Stop("Kartu 500 Diamond tidak ketemu di menu Top Up")
         if (!firstBadge(t, card)) throw Skip("bonus Top Up Pertama 500 Diamond sudah terpakai", true)
         tapXY(card.cx + t.w * 0.034f, card.cy + t.h * 0.12f, "kartu 500 Diamond")
-        val d = waitFor(4500) { it.has("pemberitahuansistem", "lanjutkan") } ?: throw Engine.Stop("Dialog harga tidak muncul setelah memilih 500 Diamond")
+        val d = waitFor(3000) { it.has("pemberitahuansistem", "lanjutkan", "tidakcukup") }
+        if (d == null || (d.has("tidakcukup") && !d.has("lanjutkan"))) {
+            log("Dialog harga tidak muncul: Vanguard Coin tidak cukup")
+            return 1
+        }
         val price = d.lines.firstOrNull { it.norm == "500" && it.cx > d.w * 0.45f && it.cx < d.w * 0.56f && it.cy > d.h * 0.38f && it.cy < d.h * 0.58f }
         if (price == null) throw Engine.Stop("Harga di dialog bukan 500, tidak dikonfirmasi")
         val kb = d.lines.firstOrNull { it.norm == "konfirmasi" } ?: d.find("konfirmasi") ?: throw Engine.Stop("Tombol Konfirmasi tidak terbaca")
@@ -563,7 +566,6 @@ object BbcEngine {
         log("Isi ID lewat Aksesibilitas: " + r)
         if (r == "OK") {
             pressOke()
-            if (cap().all.contains(id)) log("ID terisi (terbaca di dialog)") else log("ID belum terbaca di dialog, dilanjutkan")
             return
         }
         log("Pengisian otomatis gagal, mengetik lewat tombol angka papan ketik")
@@ -685,22 +687,27 @@ object BbcEngine {
 
     private fun firstRowSig(s: Scr): String = rowCands(s).joinToString("|") { it.norm }
 
-    private fun searchAndOpen(beforeSig: String) {
-        val s = cap()
-        val cb = s.lines.firstOrNull { it.norm == "cariid" } ?: s.find("cariid") ?: throw Engine.Stop("Tombol Cari ID tidak terbaca")
-        tapLine(cb, "Cari ID")
+    // Cari ID sudah diketuk tepat sesudah OKE. Tunggu hasilnya berubah; kalau belum, ketuk Cari ID lagi (maksimal 3 kali)
+    private fun searchAndOpen(beforeSig: String, cari: Line) {
         var changed = false
+        var taps = 1
+        var lastTap = now()
         val t0 = now()
-        while (now() - t0 < 8000) {
+        while (now() - t0 < 9000) {
             Engine.alive()
-            sleepMs(500)
+            sleepMs(250)
             if (firstRowSig(cap()) != beforeSig) {
                 changed = true
                 break
             }
+            if (taps < 3 && now() - lastTap > 1500) {
+                quickTap(cari.cx, cari.cy, "Cari ID (ulang)")
+                taps++
+                lastTap = now()
+            }
         }
         if (!changed) throw Engine.Stop("Hasil pencarian tidak berubah: ID tidak ditemukan atau Cari ID tidak terketuk")
-        sleepMs(700)
+        sleepMs(500)
         val fin = cap()
         val texts = rowCands(fin).map { it.text }
         log("Hasil teratas pencarian: " + texts.joinToString(" | "))
@@ -723,14 +730,29 @@ object BbcEngine {
         }
     }
 
-    private fun openLiveStream(): Scr {
+    // Buka menu Live Stream, tunggu sampai tombol Tonton terlihat (halaman sudah lengkap). Langsung ketuk Tonton (kalau diminta),
+    // lalu simpan screenshot dari layar yang sudah terbaca itu (before.png / after.png)
+    private fun openLiveStream(shotName: String?, thenTonton: Boolean) {
         val s = cap()
         val l = s.lines.firstOrNull { it.norm.contains("livestream") && it.cx < s.w * 0.20f } ?: throw Engine.Stop("Menu Live Stream tidak terbaca")
-        tapLine(l, "menu Live Stream")
-        waitFor(6500) { it.has("catatanlivestream") } ?: throw Engine.Stop("Halaman Live Stream tidak terbuka")
-        // Beri waktu angka dan tombol Tonton selesai dimuat, lalu baca layar yang baru (dipakai juga untuk before/after.png)
-        sleepMs(800)
-        return cap()
+        quickTap(l.cx, l.cy, "menu Live Stream")
+        var page: Scr? = null
+        var tn: Line? = null
+        val t0 = now()
+        while (now() - t0 < 8000) {
+            Engine.alive()
+            val c = cap()
+            val t = c.lines.filter { it.norm == "tonton" && it.cx > c.w * 0.60f }.maxByOrNull { it.cy }
+            if (c.has("catatanlivestream") && t != null) {
+                page = c
+                tn = t
+                break
+            }
+            sleepMs(60)
+        }
+        if (page == null || tn == null) throw Engine.Stop("Tombol Tonton tidak terlihat di halaman Live Stream")
+        if (thenTonton) quickTap(tn.cx, tn.cy, "Tonton")
+        if (shotName != null && saveShot(page.bmp, shotName)) log("Screenshot " + shotName + " disimpan (Pictures/VGKlaim)")
     }
 
     private fun panelDiamonds(s: Scr): Int? {
@@ -743,10 +765,7 @@ object BbcEngine {
 
     // ---------- kirim Yacht ----------
 
-    private fun sendYacht(ls: Scr) {
-        val tn = ls.lines.filter { it.norm == "tonton" && it.cx > ls.w * 0.60f }.maxByOrNull { it.cy }
-            ?: throw Engine.Stop("Tombol Tonton tidak terbaca")
-        tapLine(tn, "Tonton")
+    private fun sendYacht() {
         waitFor(7000) { it.has("trendingpoint") } ?: throw Engine.Stop("Halaman Channel tidak terbuka")
         var gp: Scr? = null
         for (att in 0 until 2) {
