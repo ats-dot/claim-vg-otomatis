@@ -216,4 +216,67 @@ object Prefs {
         }
         ed.apply()
     }
+
+    // ---------- Kirim BBC ----------
+    var homeMode: Int
+        get() = s().getInt("home_mode", 0)
+        set(v) { s().edit().putInt("home_mode", v).apply() }
+
+    var bbcId: String
+        get() = s().getString("bbc_id", "") ?: ""
+        set(v) { s().edit().putString("bbc_id", v).apply() }
+
+    var bbcNick: String
+        get() = s().getString("bbc_nick", "") ?: ""
+        set(v) { s().edit().putString("bbc_nick", v).apply() }
+
+    // Jumlah BBC yang ingin dikirim (kelipatan 1000)
+    var bbcAmount: Int
+        get() = s().getInt("bbc_amount", 0)
+        set(v) { s().edit().putInt("bbc_amount", v).apply() }
+
+    var bbcMatchNick: Boolean
+        get() = s().getBoolean("bbc_match_nick", true)
+        set(v) { s().edit().putBoolean("bbc_match_nick", v).apply() }
+
+    var bbcClaimFirst: Boolean
+        get() = s().getBoolean("bbc_claim_first", true)
+        set(v) { s().edit().putBoolean("bbc_claim_first", v).apply() }
+
+    var bbcMinLevel: Int
+        get() = s().getInt("bbc_min_level", 15)
+        set(v) { s().edit().putInt("bbc_min_level", v.coerceIn(1, 100)).apply() }
+
+    // Pesanan yang belum selesai: ID penerima, target BBC, dan BBC yang sudah terkirim
+    var bbcPendId: String
+        get() = s().getString("bbc_pend_id", "") ?: ""
+        set(v) { s().edit().putString("bbc_pend_id", v).apply() }
+
+    var bbcPendTarget: Int
+        get() = s().getInt("bbc_pend_target", 0)
+        set(v) { s().edit().putInt("bbc_pend_target", v).apply() }
+
+    var bbcPendSent: Int
+        get() = s().getInt("bbc_pend_sent", 0)
+        set(v) { s().edit().putInt("bbc_pend_sent", v).apply() }
+
+    fun bbcClearPending() {
+        s().edit().putString("bbc_pend_id", "").putInt("bbc_pend_target", 0).putInt("bbc_pend_sent", 0).apply()
+    }
+
+    // Server milik akun pengirim yang sudah dipakai kirim BBC (diingat sampai semua server terpakai)
+    fun bbcUsed(acct: String): MutableSet<String> {
+        val st = s().getStringSet("bbc_used_" + acct, null)
+        return if (st == null) HashSet() else HashSet(st)
+    }
+
+    fun bbcAddUsed(acct: String, name: String) {
+        val cur = bbcUsed(acct)
+        cur.add(name)
+        s().edit().putStringSet("bbc_used_" + acct, cur).apply()
+    }
+
+    fun bbcClearUsed(acct: String) {
+        s().edit().remove("bbc_used_" + acct).apply()
+    }
 }
