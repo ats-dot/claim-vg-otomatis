@@ -385,9 +385,9 @@ class MainActivity : Activity() {
         }
 
         val titles = listOf("VG Klaim", "Log", "Pengaturan")
-        root.addView(header(titles[tab], tab == 0, tab == 2, false))
+        if (tab == 0) root.addView(modeBar()) else root.addView(header(titles[tab], false, tab == 2, false))
         val body: View = when (tab) {
-            0 -> home()
+            0 -> if (Prefs.homeMode == 1) bbcHome() else home()
             1 -> logTab()
             else -> settings()
         }
@@ -462,7 +462,9 @@ class MainActivity : Activity() {
         stBox.addView(barBox, lpw(10, 10))
         col.addView(card(stBox), lpw(0, 4))
 
-        val cnt = numBox(if (Prefs.serverCount > 0) Prefs.serverCount.toString() else "")
+        val cnt = numBox(if (Prefs.serverCount > 0) Prefs.serverCount.toString() else "") { t ->
+            t.trim().toIntOrNull()?.let { Prefs.serverCount = it }
+        }
         cnt.hint = "Wajib diisi"
         col.addView(card(row("Jumlah server", cnt)), lpw(0, 12))
 
@@ -485,6 +487,142 @@ class MainActivity : Activity() {
             if (r != null) toast(r) else toast("Klaim dimulai")
         }, lpw(60, 16))
         col.addView(btn("BERHENTI") { Engine.stop() }, lpw(60, 10))
+        return sv
+    }
+
+    // ---------- Beranda: dua kotak pilihan (VG Klaim / Kirim BBC) ----------
+
+    private fun modeBar(): View {
+        val rowV = LinearLayout(this)
+        rowV.orientation = LinearLayout.HORIZONTAL
+        rowV.setPadding(dp(20), dp(10), dp(20), dp(4))
+        fun box(label: String, mode: Int, logo: Boolean): View {
+            val on = Prefs.homeMode == mode
+            val b = LinearLayout(this)
+            b.orientation = LinearLayout.HORIZONTAL
+            b.gravity = Gravity.CENTER
+            b.background = shape(if (on) C_ACC else Color.TRANSPARENT, if (on) C_ACC else C_LINE, 26)
+            if (logo) {
+                val iv = ImageView(this)
+                iv.setImageResource(R.drawable.ic_logo)
+                iv.setColorFilter(if (on) C_ONACC else C_ACC)
+                val ip = LinearLayout.LayoutParams(dp(26), dp(26))
+                ip.rightMargin = dp(8)
+                b.addView(iv, ip)
+            }
+            b.addView(tv(label, 17f, true, if (on) C_ONACC else C_FG))
+            b.setOnClickListener {
+                Prefs.homeMode = mode
+                render()
+            }
+            return b
+        }
+        val lp1 = LinearLayout.LayoutParams(0, dp(52), 1f)
+        lp1.rightMargin = dp(6)
+        val lp2 = LinearLayout.LayoutParams(0, dp(52), 1f)
+        lp2.leftMargin = dp(6)
+        rowV.addView(box("VG Klaim", 0, true), lp1)
+        rowV.addView(box("Kirim BBC", 1, false), lp2)
+        return rowV
+    }
+
+    private fun textBox(value: String, hint: String, numeric: Boolean, onChange: (String) -> Unit): EditText {
+        val e = EditText(this)
+        e.setText(value)
+        e.hint = hint
+        e.setTextColor(C_FG)
+        e.setHintTextColor(C_MUT)
+        e.gravity = Gravity.CENTER
+        e.textSize = 17f
+        e.inputType = if (numeric) InputType.TYPE_CLASS_NUMBER else InputType.TYPE_CLASS_TEXT
+        e.setSingleLine(true)
+        e.background = shape(Color.TRANSPARENT, C_LINE, 22)
+        e.setPadding(dp(8), 0, dp(8), 0)
+        e.layoutParams = LinearLayout.LayoutParams(dp(180), dp(44))
+        e.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                onChange(s?.toString() ?: "")
+            }
+        })
+        return e
+    }
+
+    private fun bbcHome(): View {
+        val (sv, col) = page()
+
+        val st = tv("", 22f, true, C_ACC)
+        tvStatus = st
+        val prog = tv("", 17f, false, C_FG)
+        tvProg = prog
+
+        val barBox = LinearLayout(this)
+        barBox.orientation = LinearLayout.HORIZONTAL
+        barBox.weightSum = 1f
+        barBox.background = shape(C_DIV, C_DIV, 6, 0f)
+        val fill = View(this)
+        fill.background = shape(C_ACC, C_ACC, 6, 0f)
+        val rest = View(this)
+        barFill = fill
+        barRest = rest
+        barBox.addView(fill, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0f))
+        barBox.addView(rest, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+
+        val stBox = LinearLayout(this)
+        stBox.orientation = LinearLayout.VERTICAL
+        stBox.setPadding(0, dp(12), 0, dp(14))
+        stBox.addView(tv("Status", 14f, false, C_MUT))
+        stBox.addView(st, lpw(0, 2))
+        stBox.addView(divider(), lpw(1, 12))
+        stBox.addView(tv("Terkirim", 14f, false, C_MUT), lpw(0, 12))
+        stBox.addView(prog, lpw(0, 2))
+        stBox.addView(barBox, lpw(10, 10))
+        col.addView(card(stBox), lpw(0, 4))
+
+        val idBox = textBox(Prefs.bbcId, "ID penerima", true) { t -> Prefs.bbcId = t.trim() }
+        val nickBox = textBox(Prefs.bbcNick, "Nick penerima", false) { t -> Prefs.bbcNick = t }
+        val amtBox = numBox(if (Prefs.bbcAmount > 0) Prefs.bbcAmount.toString() else "") { t ->
+            Prefs.bbcAmount = t.trim().toIntOrNull() ?: 0
+        }
+        amtBox.hint = "kelipatan 1000"
+        val cnt = numBox(if (Prefs.serverCount > 0) Prefs.serverCount.toString() else "") { t ->
+            t.trim().toIntOrNull()?.let { Prefs.serverCount = it }
+        }
+        col.addView(
+            card(
+                row("ID penerima", idBox), divider(),
+                row("Nick", nickBox), divider(),
+                switchRow("Cocokkan nick", { Prefs.bbcMatchNick }, { Prefs.bbcMatchNick = it }), divider(),
+                row("Jumlah BBC", amtBox), divider(),
+                switchRow("Klaim dulu", { Prefs.bbcClaimFirst }, { Prefs.bbcClaimFirst = it }), divider(),
+                row("Jumlah server", cnt)
+            ),
+            lpw(0, 12)
+        )
+
+        val spacer = View(this)
+        col.addView(spacer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        col.addView(btn("MULAI KIRIM", true) {
+            if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 11)
+            }
+            val r = Engine.start(applicationContext, 1)
+            if (r != null) toast(r) else toast("Kirim BBC dimulai")
+        }, lpw(60, 16))
+        col.addView(btn("BERHENTI") { Engine.stop() }, lpw(60, 10))
+        col.addView(btn("Reset progres pesanan") {
+            if (Engine.running) {
+                toast("Hentikan dulu proses yang berjalan")
+            } else {
+                Prefs.bbcClearPending()
+                toast("Progres pesanan dihapus")
+                tick()
+            }
+        }, lpw(60, 10))
         return sv
     }
 
@@ -656,6 +794,14 @@ class MainActivity : Activity() {
         gviews.add(bb)
         col.addView(section("Geser daftar server", card(*gviews.toTypedArray())), lpw(0, 16))
 
+        col.addView(
+            section(
+                "Kirim BBC",
+                card(row("Level server minimal", numBox(Prefs.bbcMinLevel.toString()) { t -> t.trim().toIntOrNull()?.let { Prefs.bbcMinLevel = it } }))
+            ),
+            lpw(0, 16)
+        )
+
         // Data
         col.addView(
             section("Data hari ini", btn("Ulangi dari awal") {
@@ -751,6 +897,7 @@ class MainActivity : Activity() {
         "Titik melayang saat klaim" to "Titik tak terlihat yang membuat baca layar sekitar 10 kali lebih cepat. Gayanya dipilih lewat Diagnosa umum.",
         "Jeda antar langkah" to "Lama bot menunggu setelah tiap ketukan sebelum melihat layar lagi, dalam milidetik. 0 berarti tanpa jeda.",
         "Nomor server pertama dan terakhir" to "Hanya nomor server dalam rentang ini (awalnya 57092 sampai 57115) yang dianggap server. Nama yang kehilangan satu digit karena salah baca (misalnya s5094) diperbaiki otomatis kalau hanya ada satu kemungkinan, dan kalau tidak, barisnya diabaikan. Ubah kalau game menambah server.",
+        "Kirim BBC" to "Pilih kotak Kirim BBC di Beranda. Isi ID penerima, nick (nyalakan Cocokkan nick untuk memastikan akun yang dikirim benar, matikan untuk memilih hasil pencarian paling atas), Jumlah BBC (kelipatan 1000), dan Jumlah server akun pengirim. Tiap server mengirim satu Yacht (1000 diamond = 1000 BBC): bot membeli 500 Diamond dengan Vanguard Coin bila diamond di lobby kurang dari 1000, mencari akun penerima lewat ID, lalu mengirim Yacht. Klaim dulu: klaim di tiap server sebelum kirim. Server yang sudah dipakai kirim diingat per akun pengirim. Kalau server di akun habis sebelum target tercapai, ganti akun lalu tekan Mulai kirim lagi: bot melanjutkan sisanya. Level server minimal (awalnya 15) dibaca dari Daftar Karakter saat memilih server berikutnya. Screenshot before.png dan after.png disimpan di Pictures/VGKlaim.",
         "Waktu tunggu lobby" to "Dalam milidetik. Dipakai hanya kalau lobby langsung muncul setelah loading tanpa popup apa pun: bot menunggu paling lama selama ini untuk popup. Begitu satu popup muncul dan ditutup, bot langsung lanjut. Kalau popup sudah muncul dan ditutup sebelum lobby, waktu ini dilewati.",
         "Geser daftar server" to "Geser cepat memuat server baru dan HANYA dipakai sekali, saat pertama mencari server baru di daftar yang baru dibuka. Sesudah itu bot hanya geser pelan. Geser pelan menggeser daftar maju. Geser balik menggeser daftar mundur, hanya kalau tidak ada server lama yang terlihat. Angka awal dan akhir adalah persen tinggi layar: 0 di atas, 100 di bawah. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot terus menggeser sampai semua server terlihat dan melaporkan hasilnya.",
         "Diagnosa" to "Tombol Diagnosa di tab Log mengukur kecepatan baca layar (OCR) dan memilih gaya titik melayang. Untuk menguji geser daftar, pakai tombol Uji sampai bawah di bagian Geser daftar server.",
@@ -790,8 +937,17 @@ class MainActivity : Activity() {
         val done = Engine.doneCount
         if (tab == 0) {
             tvStatus?.text = Engine.status
-            tvProg?.text = if (total > 0) done.toString() + " dari " + total + " server" else done.toString() + " server"
-            val f = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
+            val f: Float
+            if (Prefs.homeMode == 1) {
+                val same = Prefs.bbcPendId == Prefs.bbcId.trim() && Prefs.bbcPendTarget > 0
+                val tgt = if (same) Prefs.bbcPendTarget else Prefs.bbcAmount
+                val sent = if (same) Prefs.bbcPendSent else 0
+                tvProg?.text = sent.toString() + " dari " + tgt + " BBC"
+                f = if (tgt > 0) (sent.toFloat() / tgt).coerceIn(0f, 1f) else 0f
+            } else {
+                tvProg?.text = if (total > 0) done.toString() + " dari " + total + " server" else done.toString() + " server"
+                f = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
+            }
             if (f != lastFrac) {
                 lastFrac = f
                 barFill?.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, f)
