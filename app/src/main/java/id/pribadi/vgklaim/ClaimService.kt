@@ -263,6 +263,58 @@ class ClaimService : AccessibilityService() {
         return gesture(p, ms)
     }
 
+
+    // Mengisi kotak teks yang sedang fokus (kotak ID). Mengembalikan "OK" kalau berhasil, selain itu keterangan untuk log.
+    fun inputText(text: String): String {
+        val info = StringBuilder()
+        try {
+            val roots = ArrayList<android.view.accessibility.AccessibilityNodeInfo>()
+            val r0 = rootInActiveWindow
+            if (r0 != null) roots.add(r0)
+            try {
+                for (w in windows) {
+                    val r = w.root
+                    if (r != null) roots.add(r)
+                }
+            } catch (_: Throwable) {
+            }
+            info.append("jendela=").append(roots.size)
+            var target: android.view.accessibility.AccessibilityNodeInfo? = null
+            for (r in roots) {
+                val f = r.findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT)
+                if (f != null) {
+                    target = f
+                    break
+                }
+            }
+            if (target == null) {
+                for (r in roots) {
+                    target = findEditable(r, 0)
+                    if (target != null) break
+                }
+            }
+            if (target == null) return "tidak ada kotak teks yang terbaca (" + info + ")"
+            info.append(", kelas=").append(target.className)
+            val args = android.os.Bundle()
+            args.putCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            val ok = target.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            return if (ok) "OK" else "SET_TEXT ditolak (" + info + ")"
+        } catch (e: Throwable) {
+            return "error " + e.javaClass.simpleName
+        }
+    }
+
+    private fun findEditable(n: android.view.accessibility.AccessibilityNodeInfo?, depth: Int): android.view.accessibility.AccessibilityNodeInfo? {
+        if (n == null || depth > 25) return null
+        val cn = n.className?.toString() ?: ""
+        if (n.isEditable || cn.contains("EditText")) return n
+        for (i in 0 until n.childCount) {
+            val r = findEditable(n.getChild(i), depth + 1)
+            if (r != null) return r
+        }
+        return null
+    }
+
     fun back() {
         if (!performGlobalAction(GLOBAL_ACTION_BACK)) AppLog.add("Tombol Kembali (Back) gagal dikirim ke sistem")
     }
