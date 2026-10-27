@@ -655,13 +655,6 @@ class MainActivity : Activity() {
         gviews.add(bb)
         col.addView(section("Geser daftar server", card(*gviews.toTypedArray())), lpw(0, 16))
 
-        // Diagnosa
-        val dBox = LinearLayout(this)
-        dBox.orientation = LinearLayout.VERTICAL
-        dBox.setPadding(0, dp(12), 0, dp(12))
-        dBox.addView(seg(listOf("Umum / OCR", "Geser daftar"), Prefs.diagMode) { k -> Prefs.diagMode = k })
-        col.addView(section("Jenis diagnosa", card(dBox)), lpw(0, 16))
-
         // Data
         col.addView(
             section("Data hari ini", btn("Ulangi dari awal") {
@@ -758,7 +751,7 @@ class MainActivity : Activity() {
         "Nomor server pertama dan terakhir" to "Hanya nomor server dalam rentang ini (awalnya 57092 sampai 57115) yang dianggap server. Nama yang kehilangan satu digit karena salah baca (misalnya s5094) diperbaiki otomatis kalau hanya ada satu kemungkinan, dan kalau tidak, barisnya diabaikan. Ubah kalau game menambah server.",
         "Waktu tunggu lobby" to "Dalam milidetik. Dipakai hanya kalau lobby langsung muncul setelah loading tanpa popup apa pun: bot menunggu paling lama selama ini untuk popup. Begitu satu popup muncul dan ditutup, bot langsung lanjut. Kalau popup sudah muncul dan ditutup sebelum lobby, waktu ini dilewati.",
         "Geser daftar server" to "Geser cepat memuat server baru dan HANYA dipakai sekali, saat pertama mencari server baru di daftar yang baru dibuka. Sesudah itu bot hanya geser pelan. Geser pelan menggeser daftar maju. Geser balik menggeser daftar mundur, hanya kalau tidak ada server lama yang terlihat. Angka awal dan akhir adalah persen tinggi layar: 0 di atas, 100 di bawah. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot terus menggeser sampai semua server terlihat dan melaporkan hasilnya.",
-        "Jenis diagnosa" to "Umum / OCR mengukur kecepatan baca dan memilih gaya titik. Geser daftar menguji gesekan di Daftar Karakter. Tombol Diagnosa ada di tab Log.",
+        "Diagnosa" to "Tombol Diagnosa di tab Log mengukur kecepatan baca layar (OCR) dan memilih gaya titik melayang. Untuk menguji geser daftar, pakai tombol Uji sampai bawah di bagian Geser daftar server.",
         "Ulangi dari awal" to "Menghapus catatan server yang sudah selesai hari ini."
     )
 
