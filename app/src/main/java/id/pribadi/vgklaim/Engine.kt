@@ -897,18 +897,6 @@ object Engine {
         lastActive = now()
     }
 
-    private fun closeApp() {
-        val svc = ClaimService.inst ?: return
-        log("Menutup game")
-        svc.recents()
-        sleepS(1.5)
-        val dm = svc.resources.displayMetrics
-        val w = dm.widthPixels.toFloat()
-        val h = dm.heightPixels.toFloat()
-        svc.swipe(w / 2, h * 0.6f, w / 2, h * 0.05f, 250)
-        sleepS(1.0)
-        svc.home()
-    }
 
     // Geser pelan supaya daftar tidak "meluncur" dan melewatkan baris
     private fun slowSwipe(x1: Float, y1: Float, x2: Float, y2: Float) {
@@ -1958,13 +1946,13 @@ object Engine {
             }
             return
         }
-        closeApp()
+        // Langsung pindah, tanpa menutup game dan tanpa membuka Recents
         if (mode == 1) {
-            sleepS(0.8)
-            log("Setelah selesai: kembali ke VG Klaim")
+            log("Setelah selesai: langsung kembali ke VG Klaim")
             openOwnApp()
         } else {
-            log("Setelah selesai: ke Home")
+            log("Setelah selesai: langsung ke Home")
+            svc?.home()
         }
     }
 
@@ -2279,11 +2267,11 @@ object Engine {
         lastActive = now()
         Thread {
             try {
-                log("DIAGNOSA (" + (if (reach || Prefs.diagMode == 1) "uji sampai bawah" else "umum/OCR") + "): mulai 15 detik lagi. Pindah ke game dan buka layar yang mau diukur, lalu jangan sentuh layar.")
+                log("DIAGNOSA (" + (if (reach) "uji sampai bawah" else "umum/OCR") + "): mulai 15 detik lagi. Pindah ke game dan buka layar yang mau diukur, lalu jangan sentuh layar.")
                 ClaimService.inst?.banner("Diagnosa mulai: pindah ke game, jangan sentuh layar (15 dtk)", 12000L, false)
                 sleepS(15.0)
                 val s = cap()
-                if (reach || Prefs.diagMode == 1) {
+                if (reach) {
                     reachTest(s)
                 } else {
                 log("DIAGNOSA: layar " + s.w + "x" + s.h + ", " + s.lines.size + " baris teks")
