@@ -619,15 +619,6 @@ class MainActivity : Activity() {
             if (r != null) toast(r) else toast("Kirim BBC dimulai")
         }, lpw(60, 16))
         col.addView(btn("BERHENTI") { Engine.stop() }, lpw(60, 10))
-        col.addView(btn("Reset progres pesanan") {
-            if (Engine.running) {
-                toast("Hentikan dulu proses yang berjalan")
-            } else {
-                Prefs.bbcClearPending()
-                toast("Progres pesanan dihapus")
-                tick()
-            }
-        }, lpw(60, 10))
         return sv
     }
 
@@ -802,7 +793,11 @@ class MainActivity : Activity() {
         col.addView(
             section(
                 "Kirim BBC",
-                card(row("Level server minimal", numBox(Prefs.bbcMinLevel.toString()) { t -> t.trim().toIntOrNull()?.let { Prefs.bbcMinLevel = it } }))
+                card(
+                    row("Level server minimal", numBox(Prefs.bbcMinLevel.toString()) { t -> t.trim().toIntOrNull()?.let { Prefs.bbcMinLevel = it } }),
+                    divider(),
+                    linkRow("Data server akun", tv("Buka", 15f, true, C_ACC)) { showBbcData() }
+                )
             ),
             lpw(0, 16)
         )
@@ -815,6 +810,117 @@ class MainActivity : Activity() {
             }.also { it.layoutParams = lpw(52, 0) }), lpw(0, 16)
         )
         return sv
+    }
+
+    // Daftar akun pengirim yang punya catatan server terpakai; hapus per akun atau semuanya
+    private fun showBbcData() {
+        val d = Dialog(this)
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(dp(22), dp(20), dp(22), dp(14))
+        box.background = shape(C_POP, C_ACC, 28)
+        box.addView(tv("Data server Kirim BBC", 20f, true))
+        box.addView(tv("Akun yang pernah dipakai kirim dan server yang tercatat. Hapus kalau akun itu bisa dipakai kirim lagi.", 13f, false, C_MUT), lpw(0, 4))
+        val list = LinearLayout(this)
+        list.orientation = LinearLayout.VERTICAL
+        fun confirm(msg: String, act: () -> Unit) {
+            if (Engine.running) {
+                toast("Hentikan dulu proses yang berjalan")
+                return
+            }
+            AlertDialog.Builder(this)
+                .setMessage(msg)
+                .setPositiveButton("Hapus") { _, _ -> act() }
+                .setNegativeButton("Batal", null)
+                .show()
+        }
+        lateinit var fill: () -> Unit
+        fill = {
+            list.removeAllViews()
+            // Pesanan yang sedang berjalan (belum selesai)
+            val pid = Prefs.bbcPendId
+            val pend = LinearLayout(this)
+            pend.orientation = LinearLayout.VERTICAL
+            pend.setPadding(0, dp(10), 0, dp(10))
+            pend.addView(tv("Pesanan berjalan", 16f, true))
+            if (pid.isEmpty()) {
+                pend.addView(tv("Tidak ada pesanan yang belum selesai", 13f, false, C_MUT), lpw(0, 2))
+            } else {
+                pend.addView(tv("ID " + pid + ": terkirim " + Prefs.bbcPendSent + " dari " + Prefs.bbcPendTarget + " BBC", 13f, false, C_MUT), lpw(0, 2))
+                val delP = tv("Hapus pesanan", 15f, true, C_ACC)
+                delP.setPadding(0, dp(10), 0, dp(4))
+                delP.setOnClickListener {
+                    confirm("Hapus catatan pesanan ke ID " + pid + "? Hitungan terkirim kembali ke nol.") {
+                        Prefs.bbcClearPending()
+                        toast("Pesanan dihapus")
+                        tick()
+                        fill()
+                    }
+                }
+                pend.addView(delP)
+            }
+            list.addView(pend)
+            list.addView(divider())
+            val accts = Prefs.bbcAccounts()
+            if (accts.isEmpty()) {
+                list.addView(tv("Belum ada catatan.", 15f, false, C_MUT), lpw(0, 12))
+            }
+            for (i in accts.indices) {
+                val (id, names) = accts[i]
+                if (i > 0) list.addView(divider())
+                val rowV = LinearLayout(this)
+                rowV.orientation = LinearLayout.VERTICAL
+                rowV.setPadding(0, dp(10), 0, dp(10))
+                rowV.addView(tv("ID " + id + ": " + names.size + " server", 16f, true))
+                val last = Prefs.bbcLast(id)
+                val sub = (if (names.isEmpty()) "Belum ada server tercatat" else names.joinToString(", ")) +
+                    (if (last.isNotEmpty()) "\nTerakhir dipakai: " + last else "")
+                rowV.addView(tv(sub, 13f, false, C_MUT), lpw(0, 2))
+                val del = tv("Hapus data akun ini", 15f, true, C_ACC)
+                del.setPadding(0, dp(10), 0, dp(4))
+                del.setOnClickListener {
+                    confirm("Hapus catatan server akun " + id + "?") {
+                        Prefs.bbcClearUsed(id)
+                        toast("Data akun dihapus")
+                        fill()
+                    }
+                }
+                rowV.addView(del)
+                list.addView(rowV)
+            }
+        }
+        fill()
+        val sv = ScrollView(this)
+        sv.addView(list)
+        val svp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        svp.topMargin = dp(8)
+        box.addView(sv, svp)
+        val bb = LinearLayout(this)
+        bb.orientation = LinearLayout.HORIZONTAL
+        val b1 = btn("Hapus semua") {
+            confirm("Hapus catatan server SEMUA akun?") {
+                Prefs.bbcClearAllUsed()
+                toast("Semua data dihapus")
+                fill()
+            }
+        }
+        val b2 = btn("Tutup", true) { d.dismiss() }
+        val q1 = LinearLayout.LayoutParams(0, dp(48), 1f)
+        q1.setMargins(0, 0, dp(4), 0)
+        val q2 = LinearLayout.LayoutParams(0, dp(48), 1f)
+        q2.setMargins(dp(4), 0, 0, 0)
+        bb.addView(b1, q1)
+        bb.addView(b2, q2)
+        val bp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        bp.topMargin = dp(12)
+        box.addView(bb, bp)
+        d.setContentView(box)
+        d.window?.let { w ->
+            w.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            w.setLayout((resources.displayMetrics.widthPixels * 0.92f).toInt(), (resources.displayMetrics.heightPixels * 0.78f).toInt())
+        }
+        d.show()
     }
 
     private fun pickGame(label: TextView) {
@@ -906,6 +1012,7 @@ class MainActivity : Activity() {
         "Waktu tunggu lobby" to "Dalam milidetik. Dipakai hanya kalau lobby langsung muncul setelah loading tanpa popup apa pun: bot menunggu paling lama selama ini untuk popup. Begitu satu popup muncul dan ditutup, bot langsung lanjut. Kalau popup sudah muncul dan ditutup sebelum lobby, waktu ini dilewati.",
         "Geser daftar server" to "Geser cepat memuat server baru dan HANYA dipakai sekali, saat pertama mencari server baru di daftar yang baru dibuka. Sesudah itu bot hanya geser pelan. Geser pelan menggeser daftar maju. Geser balik menggeser daftar mundur, hanya kalau tidak ada server lama yang terlihat. Angka awal dan akhir adalah persen tinggi layar: 0 di atas, 100 di bawah. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot terus menggeser sampai semua server terlihat dan melaporkan hasilnya.",
         "Diagnosa" to "Tombol Diagnosa di tab Log mengukur kecepatan baca layar (OCR) dan memilih gaya titik melayang. Untuk menguji geser daftar, pakai tombol Uji sampai bawah di bagian Geser daftar server.",
+        "Data server akun" to "Di Pengaturan, bagian Kirim BBC. Menampilkan akun pengirim yang punya catatan server yang sudah dipakai kirim BBC. Hapus per akun atau semuanya kalau akun itu bisa dipakai kirim lagi. Di bagian atas dialog ada Pesanan berjalan (ID penerima, terkirim dari target) dengan tombol Hapus pesanan untuk memulai pesanan dari nol. Catatan tidak direset otomatis: kalau semua server akun sudah terpakai, bot berhenti dengan pesan Server di akun ini habis.",
         "Ulangi dari awal" to "Menghapus catatan server yang sudah selesai hari ini."
     )
 
