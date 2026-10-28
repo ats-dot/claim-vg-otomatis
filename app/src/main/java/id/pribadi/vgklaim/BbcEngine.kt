@@ -167,7 +167,7 @@ object BbcEngine {
         }
     }
 
-    private fun captureProblem(msg: String) {
+    fun captureProblem(msg: String) {
         try {
             val s = cap()
             if (saveShot(s.bmp, "masalah.png")) log("Screenshot masalah.png disimpan (Pictures/VGKlaim). Masalah: " + msg)
