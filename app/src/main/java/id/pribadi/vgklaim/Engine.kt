@@ -173,6 +173,7 @@ object Engine {
         } catch (e: Stop) {
             status = "Berhenti"
             log("Berhenti: " + e.message)
+            if (mode == 0 && e.message != "Dihentikan") BbcEngine.captureProblem(e.message ?: "")
             showBanner(true)
         } catch (e: InterruptedException) {
             status = "Berhenti"
@@ -1615,26 +1616,84 @@ object Engine {
         }
     }
 
+    // Jumlah menu di kolom kiri halaman Hadiah (dikelompokkan per baris). Halaman yang belum selesai dimuat
+    // (HP lag) hanya punya 3 menu atau kurang; halaman lengkap punya lebih dari 3.
+    private fun menuCount(s: Scr): Int {
+        val ys = s.lines.filter {
+            it.cx > s.w * 0.07f && it.cx < s.w * 0.24f && it.cy > s.h * 0.12f && it.cy < s.h * 0.97f &&
+                it.norm.length >= 3 && it.norm != "new"
+        }.map { it.cy }.sorted()
+        var n = 0
+        var prev = -1f
+        for (y in ys) {
+            if (prev < 0f || y - prev > s.h * 0.06f) n++
+            prev = y
+        }
+        return n
+    }
+
     private fun openEvent() {
         var cycles = 0
         var quietSince = 0L
         var lastTxt = ""
+        var recoveries = 0
+        var failTaps = 0
+        // Halaman Hadiah terbuka tapi menunya belum lengkap (3 atau kurang): Back ke lobby, lalu Event dan petir lagi
+        fun recoverShort(n: Int) {
+            recoveries++
+            if (recoveries > 3) throw Stop("Menu Hadiah hanya " + n + " item setelah 3 kali pemulihan")
+            log("Menu Hadiah baru " + n + " item (belum selesai dimuat). Back ke lobby, lalu ketuk Event dan petir lagi")
+            back()
+            failTaps = 0
+        }
         val tEnd = now() + 45_000L
-        while (now() < tEnd) {
+        outer@ while (now() < tEnd) {
             val s = cap()
-            if (eventOpen(s)) return
-            if (s.exact("hadiah") != null && waitHadiah("")) return
+            if (eventOpen(s)) {
+                val n = menuCount(s)
+                if (n > 3) return
+                recoverShort(n)
+                continue
+            }
+            if (s.exact("hadiah") != null && waitHadiah("")) {
+                val n = menuCount(cap())
+                if (n > 3) return
+                recoverShort(n)
+                continue
+            }
             if (popups(s)) continue
             lastTxt = s.all.take(120)
             if (!isLobby(s)) {
                 // Bukan lobby dan bukan halaman Hadiah: kemungkinan layar Event tab lain
                 // (mis. Festival Pemuda). Cari ikon petir (tab Hadiah) dan ketuk SATU kali.
                 val before = pageTitle(s)
+                // Halaman Berita (Patch Note) bukan Hadiah: ikon petir di situ tidak membuka Hadiah. Back ke lobby, lalu Event dan petir lagi
+                if (before == "berita") {
+                    recoveries++
+                    if (recoveries > 3) throw Stop("Halaman Berita terus terbuka, bukan Hadiah. Teks layar: " + lastTxt)
+                    log("Halaman Berita (Patch Note) terbuka, bukan Hadiah. Back ke lobby, lalu ketuk Event dan petir lagi")
+                    back()
+                    failTaps = 0
+                    continue
+                }
                 val col = Rect(0, (s.h * 0.10f).toInt(), (s.w * 0.12f).toInt(), (s.h * 0.95f).toInt())
                 val p = Matcher.findPrefix(s, "petir", col)
                 if (p != null) {
-                    tapXY(p.x, p.y, "tab Hadiah (template petir, cocok " + (p.score * 100).toInt() + "%)")
-                    if (waitHadiah(before)) return
+                    tapXY(p.x, p.y, "tab Hadiah (template petir, cocok " + (p.score * 100).toInt() + "%) di " + p.x.toInt() + "," + p.y.toInt() + " (layar " + s.w + "x" + s.h + ")")
+                    if (waitHadiah(before)) {
+                        val n = menuCount(cap())
+                        if (n > 3) return
+                        recoverShort(n)
+                        continue
+                    }
+                    failTaps++
+                    if (failTaps >= 2) {
+                        recoveries++
+                        if (recoveries > 3) throw Stop("Tab Hadiah tidak terbuka setelah beberapa kali. Teks layar: " + lastTxt)
+                        log("Tab Hadiah belum terbuka setelah " + failTaps + " ketukan. Back ke lobby, lalu ketuk Event dan petir lagi")
+                        back()
+                        failTaps = 0
+                    }
                     continue
                 }
                 // Halaman masih memuat (hampir tidak ada tulisan): tunggu dulu, jangan mengetuk tab
@@ -1650,7 +1709,10 @@ object Engine {
                     tapXY(s.w * PETIR_X, s.h * yy, "ikon tab kiri y=" + (yy * 100).toInt() + "% (cari tab Hadiah)")
                     if (waitHadiah(before)) {
                         learnPetir(s, s.w * PETIR_X, s.h * yy)
-                        return
+                        val n = menuCount(cap())
+                        if (n > 3) return
+                        recoverShort(n)
+                        continue@outer
                     }
                 }
                 cycles++
