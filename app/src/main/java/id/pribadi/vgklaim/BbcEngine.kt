@@ -348,7 +348,6 @@ object BbcEngine {
                 Engine.status = "Kirim BBC di " + label
             }
             ensureDiamonds()
-            closeSquadPopup()
             openFriendDialog()
             typeId(Prefs.bbcId.trim())
             // Tunggu dialog kembali (tombol Cari ID terlihat), catat daftar saran saat itu, lalu langsung ketuk
@@ -523,12 +522,25 @@ object BbcEngine {
     // 0 = berhasil (diamond 1000 sudah masuk dan kembali di lobby), 1 = Vanguard Coin tidak cukup (masih di menu Top Up)
     private fun buyDiamonds(): Int {
         var t = openFromLobby(0.730f, 0.054f, "tanda + di lobby (Top Up)", { isTopUp(it) }, "Menu Top Up tidak terbuka")
-        // Harga harus dalam Vanguard Coin (mode diamond menampilkan harga Rupiah "Rp ..."). Ketuk Ganti SEKALI,
-        // lalu tunggu sampai harganya berubah
+        // Harga harus dalam Vanguard Coin (mode diamond menampilkan harga Rupiah "Rp ..."). Ketuk Ganti, tunggu 1 detik;
+        // kalau harganya belum berubah, ketuk SATU kali lagi (ketukan pertama bisa terabaikan saat halaman masih beranimasi)
         if (rpMode(t)) {
             val g = t.lines.firstOrNull { it.norm == "ganti" } ?: t.find("ganti") ?: throw Engine.Stop("Tombol Ganti tidak terbaca di menu Top Up")
             tapLine(g, "Ganti (harga Vanguard Coin)")
-            t = waitFor(4000) { !rpMode(it) && isTopUp(it) } ?: throw Engine.Stop("Harga masih Rupiah setelah mengetuk Ganti")
+            val ok1 = waitFor(1000) { !rpMode(it) && isTopUp(it) }
+            if (ok1 != null) {
+                t = ok1
+            } else {
+                val c = cap()
+                if (!rpMode(c) && isTopUp(c)) {
+                    t = c
+                } else {
+                    val g2 = c.lines.firstOrNull { it.norm == "ganti" } ?: g
+                    log("Harga belum berubah setelah 1 detik, mengetuk Ganti sekali lagi")
+                    tapLine(g2, "Ganti (ulang, harga belum berubah)")
+                    t = waitFor(4000) { !rpMode(it) && isTopUp(it) } ?: throw Engine.Stop("Harga masih Rupiah setelah mengetuk Ganti dua kali")
+                }
+            }
         }
         val card = t.lines.firstOrNull { it.norm == "500diamond" }
             ?: t.lines.firstOrNull { it.norm.length == 10 && lev(it.norm, "500diamond") <= 1 }
@@ -581,8 +593,8 @@ object BbcEngine {
 
     // ---------- Squad, cari akun, profil ----------
 
-    private fun closeSquadPopup() {
-        var s = cap()
+    private fun closeSquadPopup(first: Scr) {
+        var s = first
         if (!s.has("squadtersedia")) return
         log("Popup Sekarang Squad Tersedia ada, dihilangkan")
         tapXY(s.w * 0.933f, s.h * 0.681f, "ikon Squad")
@@ -599,12 +611,24 @@ object BbcEngine {
         }
     }
 
+    // Satu bacaan layar untuk memastikan lobby (sekaligus mengecek popup Squad), lalu langsung mengetuk ikon orang +.
+    // Popup baru diperiksa kalau dialog tidak terbuka sesudah ketukan.
     private fun openFriendDialog() {
         val s = waitFor(8000) { sc ->
-            (sc.has("tambahkanteman") && sc.has("cariid")) || (Engine.isLobby(sc) && !Engine.eventOpen(sc) && !sc.has("squadtersedia") && !sc.has("masterycode"))
+            (sc.has("tambahkanteman") && sc.has("cariid")) || (Engine.isLobby(sc) && !Engine.eventOpen(sc) && !sc.has("masterycode"))
         } ?: throw Engine.Stop("Lobby tidak siap untuk membuka dialog teman")
         if (s.has("tambahkanteman") && s.has("cariid")) return
-        openFromLobby(0.893f, 0.679f, "ikon orang + (tambah teman)", { it.has("tambahkanteman") }, "Dialog Tambahkan Teman tidak terbuka")
+        closeSquadPopup(s)
+        for (attempt in 0 until 3) {
+            quickTap(s.w * 0.893f, s.h * 0.679f, "ikon orang + (tambah teman)")
+            if (waitFor(5000) { it.has("tambahkanteman") } != null) return
+            val c = cap()
+            val popup = Engine.popups(c) || Engine.darkPopupX(c) || c.has("bintangkeberuntungan", "penawarankhusus")
+            if (!popup) throw Engine.Stop("Dialog Tambahkan Teman tidak terbuka")
+            log("Ketukan terhalang popup, popup ditangani lalu mengetuk lagi")
+            clearLobbyPopups()
+        }
+        throw Engine.Stop("Dialog Tambahkan Teman tidak terbuka")
     }
 
     private fun typeId(id: String) {
