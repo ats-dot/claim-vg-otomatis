@@ -45,9 +45,10 @@ object Prefs {
         get() = s().getInt("dot_style", 5)
         set(v) { s().edit().putInt("dot_style", v).apply() }
 
+    // Jeda sesudah tiap ketukan (ms). Bawaan 0: ketukan berikutnya menunggu pengecekan layar (OCR), bukan waktu tetap
     var stepMs: Int
-        get() = s().getInt("step_ms", 400)
-        set(v) { s().edit().putInt("step_ms", v.coerceIn(0, 3000)).apply() }
+        get() = s().getInt("step_ms0", 0)
+        set(v) { s().edit().putInt("step_ms0", v.coerceIn(0, 3000)).apply() }
 
     var swipeHardMs: Int
         get() = s().getInt("swipe_hard_ms", 150)
@@ -242,6 +243,11 @@ object Prefs {
     var bbcClaimFirst: Boolean
         get() = s().getBoolean("bbc_claim_first", true)
         set(v) { s().edit().putBoolean("bbc_claim_first", v).apply() }
+
+    // Server bernomor lebih kecil dari ini dianggap sudah terpakai dan tidak dikunjungi (0 = mati)
+    var bbcStartFrom: Int
+        get() = s().getInt("bbc_start_from", 0)
+        set(v) { s().edit().putInt("bbc_start_from", v.coerceIn(0, 999999)).apply() }
 
     var bbcMinLevel: Int
         get() = s().getInt("bbc_min_level", 15)
