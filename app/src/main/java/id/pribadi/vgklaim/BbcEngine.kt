@@ -785,8 +785,19 @@ object BbcEngine {
     private fun sendYacht() {
         val ch = waitFor(7000) { it.has("trendingpoint") } ?: throw Engine.Stop("Halaman Channel tidak terbuka")
         quickTap(ch.w * 0.866f, ch.h * 0.946f, "ikon hadiah")
-        val g = waitFor(6000) { it.has("yacht") && it.has("airplane") } ?: throw Engine.Stop("Daftar hadiah (Yacht) tidak muncul")
-        val y = g.lines.firstOrNull { it.norm == "yacht" } ?: g.find("yacht") ?: throw Engine.Stop("Tulisan Yacht tidak terbaca")
+        var g = waitFor(6000) { it.has("yacht") && it.has("airplane") } ?: throw Engine.Stop("Daftar hadiah (Yacht) tidak muncul")
+        var y = g.lines.firstOrNull { it.norm == "yacht" } ?: g.find("yacht") ?: throw Engine.Stop("Tulisan Yacht tidak terbaca")
+        // Panel hadiah naik dengan animasi: ketuk Yacht hanya kalau posisinya sama di dua bacaan berturut-turut (panel sudah diam)
+        val tStable = now()
+        while (now() - tStable < 4000L) {
+            Engine.alive()
+            val c = cap()
+            val y2 = c.lines.firstOrNull { it.norm == "yacht" } ?: continue
+            val stable = Math.abs(y2.cx - y.cx) < c.w * 0.004f && Math.abs(y2.cy - y.cy) < c.h * 0.006f
+            g = c
+            y = y2
+            if (stable) break
+        }
         val before = panelDiamonds(g)
         // Dua kemungkinan yang tidak pernah muncul bersamaan: dialog Beri Hadiah (level cukup) atau tulisan
         // "Mencapai Lv ... untuk mengirim!" tanpa dialog (level kurang, server dilewati)
