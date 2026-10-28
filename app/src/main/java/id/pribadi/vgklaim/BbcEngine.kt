@@ -255,7 +255,6 @@ object BbcEngine {
         }
         log("Akun " + Engine.acct + ", server yang sudah dipakai kirim BBC: " + Engine.done.size)
 
-        var resetDone = false
         var guard = 0
         while (true) {
             Engine.alive()
@@ -291,15 +290,6 @@ object BbcEngine {
             if (guard > 80) throw Engine.Stop("Terlalu banyak server")
             val next = Engine.pickNext()
             if (next == null) {
-                if (!resetDone && Engine.acct != "-" && Prefs.bbcUsed(Engine.acct).size >= Prefs.serverCount) {
-                    resetDone = true
-                    Prefs.bbcClearUsed(Engine.acct)
-                    Engine.done.clear()
-                    Engine.skipped.clear()
-                    needLobby = true
-                    log("Semua server akun ini sudah pernah dipakai kirim BBC, ingatan direset")
-                    continue
-                }
                 exhausted = true
                 log("Server di akun ini habis. Terkirim " + Prefs.bbcPendSent + " dari " + Prefs.bbcPendTarget + " BBC")
                 break
@@ -933,7 +923,16 @@ object BbcEngine {
 
     private fun normNick(t: String): String {
         val d = Normalizer.normalize(t, Normalizer.Form.NFD)
-        return d.replace(Regex("\\p{M}+"), "").lowercase().filter { it.isLetterOrDigit() }
+        // Huruf yang mirip rupa dianggap sama (1 I l, 0 O, 5 S, 8 B) supaya salah baca OCR tidak menggagalkan pencocokan
+        return d.replace(Regex("\\p{M}+"), "").lowercase().filter { it.isLetterOrDigit() }.map { ch ->
+            when (ch) {
+                '1', 'l' -> 'i'
+                '0' -> 'o'
+                '5' -> 's'
+                '8' -> 'b'
+                else -> ch
+            }
+        }.joinToString("")
     }
 
     private fun lev(a: String, b: String): Int {
