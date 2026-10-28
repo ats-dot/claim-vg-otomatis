@@ -637,7 +637,23 @@ object Engine {
         return r
     }
 
+    // Popup "Mastery Code": menutupi lobby, tanpa tombol X, tidak bisa ditutup dengan Back, hilang sendiri dalam beberapa detik.
+    // Jangan mengetuk apa pun; tunggu sampai tulisannya hilang (maksimal 6 detik).
+    internal fun waitMasteryCode() {
+        log("Popup Mastery Code (tanpa tombol, hilang sendiri): menunggu tanpa mengetuk")
+        val tw = now()
+        while (now() - tw < 6000L) {
+            alive()
+            if (!cap().has("masterycode")) return
+        }
+        log("Popup Mastery Code masih terlihat setelah 6 detik")
+    }
+
     private fun popupsRaw(s: Scr): Boolean {
+        if (s.has("masterycode")) {
+            waitMasteryCode()
+            return true
+        }
         if (s.has("bonuslogin") && !eventOpen(s) && !isLobby(s)) {
             log("Layar Bonus Login 9 Hari muncul, ditutup tanpa klaim")
             if (flip++ % 2 == 0) tapArrow(s) else back()
@@ -796,6 +812,11 @@ object Engine {
         if (m >= 175) {
             darkTaps = 0
             return false
+        }
+        if (s.has("masterycode")) {
+            waitMasteryCode()
+            popupSeen = true
+            return true
         }
         // Dialog "Keluar" (Kamu masih memiliki hadiah gratis yang belum diklaim hari ini): tidak punya tombol X, tutup dengan Back
         if (s.has("hadiahgratis", "belumdiklaimhariini")) {
