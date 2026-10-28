@@ -797,6 +797,13 @@ object Engine {
             darkTaps = 0
             return false
         }
+        // Dialog "Keluar" (Kamu masih memiliki hadiah gratis yang belum diklaim hari ini): tidak punya tombol X, tutup dengan Back
+        if (s.has("hadiahgratis", "belumdiklaimhariini")) {
+            log("Dialog Keluar (hadiah gratis belum diklaim) ditutup dengan Back")
+            back()
+            popupSeen = true
+            return true
+        }
         if (now() < topupBlockUntil) return false
         // Maksimal 3 ketukan X (tanpa jeda tambahan, tanpa dibatalkan penjaga ketukan dobel). Kalau popup masih ada,
         // bot BERHENTI dengan pesan supaya Anda yang memeriksa layarnya.
