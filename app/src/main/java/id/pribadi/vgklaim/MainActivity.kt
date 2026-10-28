@@ -589,6 +589,10 @@ class MainActivity : Activity() {
         val cnt = numBox(if (Prefs.serverCount > 0) Prefs.serverCount.toString() else "") { t ->
             t.trim().toIntOrNull()?.let { Prefs.serverCount = it }
         }
+        val startBox = numBox(if (Prefs.bbcStartFrom > 0) Prefs.bbcStartFrom.toString() else "") { t ->
+            Prefs.bbcStartFrom = t.trim().toIntOrNull() ?: 0
+        }
+        startBox.hint = "mis. 57102"
         col.addView(
             card(
                 row("ID penerima", idBox), divider(),
@@ -596,7 +600,8 @@ class MainActivity : Activity() {
                 switchRow("Cocokkan nick", { Prefs.bbcMatchNick }, { Prefs.bbcMatchNick = it }), divider(),
                 row("Jumlah BBC", amtBox), divider(),
                 switchRow("Klaim dulu", { Prefs.bbcClaimFirst }, { Prefs.bbcClaimFirst = it }), divider(),
-                row("Jumlah server", cnt)
+                row("Jumlah server", cnt), divider(),
+                row("Mulai dari server", startBox)
             ),
             lpw(0, 12)
         )
@@ -732,7 +737,7 @@ class MainActivity : Activity() {
         saveBox.orientation = LinearLayout.VERTICAL
         saveBox.setPadding(0, dp(12), 0, dp(12))
         saveBox.addView(btn("Simpan") {
-            Prefs.stepMs = sm.text.toString().trim().toIntOrNull() ?: 400
+            Prefs.stepMs = sm.text.toString().trim().toIntOrNull() ?: 0
             Prefs.lobbyWait = lw.text.toString().trim().toIntOrNull() ?: 3000
             toast("Tersimpan")
         }, lpw(48, 0))
@@ -897,7 +902,7 @@ class MainActivity : Activity() {
         "Titik melayang saat klaim" to "Titik tak terlihat yang membuat baca layar sekitar 10 kali lebih cepat. Gayanya dipilih lewat Diagnosa umum.",
         "Jeda antar langkah" to "Lama bot menunggu setelah tiap ketukan sebelum melihat layar lagi, dalam milidetik. 0 berarti tanpa jeda.",
         "Nomor server pertama dan terakhir" to "Hanya nomor server dalam rentang ini (awalnya 57092 sampai 57115) yang dianggap server. Nama yang kehilangan satu digit karena salah baca (misalnya s5094) diperbaiki otomatis kalau hanya ada satu kemungkinan, dan kalau tidak, barisnya diabaikan. Ubah kalau game menambah server.",
-        "Kirim BBC" to "Pilih kotak Kirim BBC di Beranda. Isi ID penerima, nick (nyalakan Cocokkan nick untuk memastikan akun yang dikirim benar, matikan untuk memilih hasil pencarian paling atas), Jumlah BBC (kelipatan 1000), dan Jumlah server akun pengirim. Tiap server mengirim satu Yacht (1000 diamond = 1000 BBC): bot membeli 500 Diamond dengan Vanguard Coin bila diamond di lobby kurang dari 1000, mencari akun penerima lewat ID, lalu mengirim Yacht. Klaim dulu: klaim di tiap server sebelum kirim. Server yang sudah dipakai kirim diingat per akun pengirim. Kalau server di akun habis sebelum target tercapai, ganti akun lalu tekan Mulai kirim lagi: bot melanjutkan sisanya. Level server minimal (awalnya 15): server pertama di akun dicek dari angka di bawah nama pemain di lobby, server berikutnya dicek dari Daftar Karakter saat dipilih. Server yang levelnya kurang dilewati tanpa membelanjakan koin. Screenshot before.png dan after.png disimpan di Pictures/VGKlaim.",
+        "Kirim BBC" to "Pilih kotak Kirim BBC di Beranda. Isi ID penerima, nick (nyalakan Cocokkan nick untuk memastikan akun yang dikirim benar, matikan untuk memilih hasil pencarian paling atas), Jumlah BBC (kelipatan 1000), dan Jumlah server akun pengirim. Tiap server mengirim satu Yacht (1000 diamond = 1000 BBC): bot membeli 500 Diamond dengan Vanguard Coin bila diamond di lobby kurang dari 1000, mencari akun penerima lewat ID, lalu mengirim Yacht. Klaim dulu: klaim di tiap server sebelum kirim. Server yang sudah dipakai kirim diingat per akun pengirim. Kalau server di akun habis sebelum target tercapai, ganti akun lalu tekan Mulai kirim lagi: bot melanjutkan sisanya. Mulai dari server (kosong = mati): server bernomor lebih kecil dianggap sudah terpakai dan tidak dikunjungi, berguna untuk akun yang bonus Top Up Pertamanya sudah terpakai sampai nomor tertentu. Level server minimal (awalnya 15): server pertama di akun dicek dari angka di bawah nama pemain di lobby, server berikutnya dicek dari Daftar Karakter saat dipilih. Server yang levelnya kurang dilewati tanpa membelanjakan koin. Screenshot before.png dan after.png disimpan di Pictures/VGKlaim.",
         "Waktu tunggu lobby" to "Dalam milidetik. Dipakai hanya kalau lobby langsung muncul setelah loading tanpa popup apa pun: bot menunggu paling lama selama ini untuk popup. Begitu satu popup muncul dan ditutup, bot langsung lanjut. Kalau popup sudah muncul dan ditutup sebelum lobby, waktu ini dilewati.",
         "Geser daftar server" to "Geser cepat memuat server baru dan HANYA dipakai sekali, saat pertama mencari server baru di daftar yang baru dibuka. Sesudah itu bot hanya geser pelan. Geser pelan menggeser daftar maju. Geser balik menggeser daftar mundur, hanya kalau tidak ada server lama yang terlihat. Angka awal dan akhir adalah persen tinggi layar: 0 di atas, 100 di bawah. Uji sampai bawah: isi Jumlah server (uji), buka Daftar Karakter, tekan tombolnya, lalu pindah ke game. Bot terus menggeser sampai semua server terlihat dan melaporkan hasilnya.",
         "Diagnosa" to "Tombol Diagnosa di tab Log mengukur kecepatan baca layar (OCR) dan memilih gaya titik melayang. Untuk menguji geser daftar, pakai tombol Uji sampai bawah di bagian Geser daftar server.",
