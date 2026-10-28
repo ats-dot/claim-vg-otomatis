@@ -393,7 +393,6 @@ object Engine {
     internal fun back() {
         ClaimService.inst?.back()
         lastActive = now()
-        sleepMs(150)
         stepWait()
     }
 
@@ -870,7 +869,8 @@ object Engine {
             } else {
                 back()
             }
-            sleepMs(100)
+            // Jangan menekan lagi sebelum layar berubah, supaya Back tidak jatuh di lobby (memunculkan dialog Keluar)
+            waitScreenChange(s.all)
         }
         throw Stop("Gagal kembali ke lobby")
     }
@@ -1283,11 +1283,16 @@ object Engine {
         readProfileInfo(p)
         val tab = akunTab(p)
         tapXY(tab.first, tab.second, "tab Pengaturan Akun", true)
-        sleepS(1.0)
         // Kalau screenshot gagal berulang di sini, cadangan: ketuk posisi tetap Ganti Server
         setBlind(0.807f, 0.676f, "Ganti Server (posisi tetap, layar Pengaturan Akun tidak bisa dibaca)")
         val a = try {
-            cap(R_AKUN)
+            var x = cap(R_AKUN)
+            val tw = now()
+            while (!isAccount(x) && now() - tw < 4000L) {
+                alive()
+                x = cap(R_AKUN)
+            }
+            x
         } finally {
             clearBlind()
         }
@@ -1316,7 +1321,12 @@ object Engine {
                     // Back langsung (tanpa jeda antar langkah), tunggu sebentar, lalu ketuk tab dengan posisi yang sudah dibaca
                     ClaimService.inst?.back()
                     lastActive = now()
-                    sleepMs(300)
+                    val tp = now()
+                    while (now() - tp < 1500L) {
+                        alive()
+                        val c = cap()
+                        if (!(isProfile(c) && featurePopup(c))) break
+                    }
                     val tb = akunTab(a)
                     lastTab = now()
                     tabTaps++
@@ -1329,8 +1339,6 @@ object Engine {
                     if (tabTaps >= 3) log("Tab Pengaturan Akun diketuk " + tabTaps + "x tapi belum pindah. Teks layar: " + a.all.take(120))
                     val tab = akunTab(a)
                     tapXY(tab.first, tab.second, "tab Pengaturan Akun", true)
-                } else {
-                    sleepMs(150)
                 }
             } else if (isLobby(a)) {
                 if (darkPopupX(a)) continue
@@ -1392,8 +1400,12 @@ object Engine {
                 continue
             }
             tapAvatar(s, avatarFails >= 1 && Matcher.has("avatar"))
-            sleepS(1.5)
-            val pr = cap(R_PROFIL)
+            var pr = cap(R_PROFIL)
+            val tpr = now()
+            while (!isProfile(pr) && now() - tpr < 3000L) {
+                alive()
+                pr = cap(R_PROFIL)
+            }
             if (isProfile(pr)) {
                 val r = profileToList(pr)
                 if (r != null) return r
@@ -1437,7 +1449,7 @@ object Engine {
             alive()
             for ((n, ln) in serverNums(s)) {
                 if (!isDone(n) && n != cur) {
-                    if (mode == 1 && !BbcEngine.levelOk(n, s, ln)) {
+                    if (mode == 1 && (BbcEngine.belowStart(n) || !BbcEngine.levelOk(n, s, ln))) {
                         skipped.add(n)
                         continue
                     }
@@ -1481,7 +1493,6 @@ object Engine {
         }
         val l = found ?: throw Stop("Server " + name + " tidak ditemukan di daftar")
         tapLine(l, "Pilih server " + name)
-        sleepMs(300)
         confirmSwitch()
         awaitLobby(200, true)
         settleLobby()
@@ -1571,6 +1582,21 @@ object Engine {
     }
 
     // Judul halaman: tulisan di pojok kiri atas
+    // Judul halaman Event (mulai sesudah panah kembali, x > 14% lebar). Nama pemain di lobby ada di sebelah kiri dan tidak ikut
+    private fun eventTitle(s: Scr): String =
+        s.lines.filter { it.cy < s.h * 0.09f && it.r.left > s.w * 0.14f && it.cx < s.w * 0.5f && it.norm.length >= 4 && it.norm != "new" }
+            .sortedBy { it.cx }.joinToString("") { it.norm }
+
+    // Tunggu sampai isi layar berubah dari yang tadi (maksimal 1,5 detik)
+    private fun waitScreenChange(prev: String) {
+        val t0 = now()
+        while (now() - t0 < 1500L) {
+            alive()
+            if (cap().all != prev) return
+            sleepMs(40)
+        }
+    }
+
     private fun pageTitle(s: Scr): String =
         s.lines.filter { it.cy < s.h * 0.10f && it.cx < s.w * 0.5f }.sortedBy { it.cx }.joinToString("") { it.norm }
 
@@ -1664,63 +1690,59 @@ object Engine {
             if (popups(s)) continue
             lastTxt = s.all.take(120)
             if (!isLobby(s)) {
-                // Bukan lobby dan bukan halaman Hadiah: kemungkinan layar Event tab lain
-                // (mis. Festival Pemuda). Cari ikon petir (tab Hadiah) dan ketuk SATU kali.
+                // Bukan lobby dan bukan halaman Hadiah. Hanya mengetuk kolom ikon kiri kalau layar jelas halaman Event.
                 val before = pageTitle(s)
-                // Halaman Berita (Patch Note) bukan Hadiah: ikon petir di situ tidak membuka Hadiah. Back ke lobby, lalu Event dan petir lagi
-                if (before == "berita") {
+                // Halaman yang salah (Berita, Chat Global): ikon petir di situ bukan tab Hadiah. Back ke lobby, lalu Event dan petir lagi
+                if (before == "berita" || before == "semuateman" || s.has("chatglobal")) {
                     recoveries++
-                    if (recoveries > 3) throw Stop("Halaman Berita terus terbuka, bukan Hadiah. Teks layar: " + lastTxt)
-                    log("Halaman Berita (Patch Note) terbuka, bukan Hadiah. Back ke lobby, lalu ketuk Event dan petir lagi")
+                    if (recoveries > 3) throw Stop("Halaman salah terus terbuka (" + before + "), bukan Hadiah. Teks layar: " + lastTxt)
+                    log("Halaman " + (if (before == "berita") "Berita (Patch Note)" else "Chat Global") + " terbuka, bukan Hadiah. Back ke lobby, lalu ketuk Event dan petir lagi")
                     back()
                     failTaps = 0
                     continue
                 }
-                val col = Rect(0, (s.h * 0.10f).toInt(), (s.w * 0.12f).toInt(), (s.h * 0.95f).toInt())
-                val p = Matcher.findPrefix(s, "petir", col)
-                if (p != null) {
-                    tapXY(p.x, p.y, "tab Hadiah (template petir, cocok " + (p.score * 100).toInt() + "%) di " + p.x.toInt() + "," + p.y.toInt() + " (layar " + s.w + "x" + s.h + ")")
-                    if (waitHadiah(before)) {
-                        val n = menuCount(cap())
-                        if (n > 3) return
-                        recoverShort(n)
+                // Layar belum jelas (lobby tertutup popup atau sedang berpindah): tunggu dan baca ulang, jangan mengetuk kolom kiri
+                if (eventTitle(s).isEmpty()) {
+                    if (quietSince == 0L) quietSince = now()
+                    if (now() - quietSince < 5000L) {
+                        sleepMs(100)
                         continue
                     }
-                    failTaps++
-                    if (failTaps >= 2) {
-                        recoveries++
-                        if (recoveries > 3) throw Stop("Tab Hadiah tidak terbuka setelah beberapa kali. Teks layar: " + lastTxt)
-                        log("Tab Hadiah belum terbuka setelah " + failTaps + " ketukan. Back ke lobby, lalu ketuk Event dan petir lagi")
-                        back()
-                        failTaps = 0
-                    }
-                    continue
-                }
-                // Halaman masih memuat (hampir tidak ada tulisan): tunggu dulu, jangan mengetuk tab
-                if (before.isEmpty() && s.lines.size < 4) {
-                    if (quietSince == 0L) quietSince = now()
-                    if (now() - quietSince < 4000L) continue
                 } else {
                     quietSince = 0L
                 }
-                // Tanpa template: coba posisi umum ikon petir satu per satu. Pindah ke posisi
-                // berikutnya hanya kalau halaman sudah jelas bukan Hadiah.
-                for (yy in listOf(PETIR_Y, 0.347f, 0.671f, 0.185f)) {
-                    tapXY(s.w * PETIR_X, s.h * yy, "ikon tab kiri y=" + (yy * 100).toInt() + "% (cari tab Hadiah)")
-                    if (waitHadiah(before)) {
-                        learnPetir(s, s.w * PETIR_X, s.h * yy)
-                        val n = menuCount(cap())
-                        if (n > 3) return
-                        recoverShort(n)
-                        continue@outer
+                // Baca ulang sebelum mengetuk di titik berisiko
+                val s2 = cap()
+                if (isLobby(s2) || eventOpen(s2)) continue
+                val t2 = pageTitle(s2)
+                var tx = s2.w * PETIR_X
+                var ty = s2.h * PETIR_Y
+                var how = "posisi tetap petir"
+                if (failTaps >= 1) {
+                    // Ketukan posisi tetap sudah gagal: coba template, hanya kalau lokasinya dekat posisi tetap
+                    val col = Rect(0, (s2.h * 0.10f).toInt(), (s2.w * 0.12f).toInt(), (s2.h * 0.95f).toInt())
+                    val p = Matcher.findPrefix(s2, "petir", col)
+                    if (p != null && Math.abs(p.x - tx) < s2.w * 0.03f && Math.abs(p.y - ty) < s2.h * 0.08f) {
+                        tx = p.x
+                        ty = p.y
+                        how = "template petir dekat posisi tetap, cocok " + (p.score * 100).toInt() + "%"
                     }
                 }
-                cycles++
-                log("Halaman Hadiah belum terbuka setelah semua tab dicoba (putaran " + cycles + "). Teks layar: " + lastTxt)
-                if (cycles >= 2) {
-                    cycles = 0
-                    tapArrow(s)
-                    sleepS(1.0)
+                tapXY(tx, ty, "tab Hadiah (" + how + ") di " + tx.toInt() + "," + ty.toInt() + " (layar " + s2.w + "x" + s2.h + ")")
+                if (waitHadiah(t2)) {
+                    learnPetir(s2, tx, ty)
+                    val n = menuCount(cap())
+                    if (n > 3) return
+                    recoverShort(n)
+                    continue
+                }
+                failTaps++
+                if (failTaps >= 2) {
+                    recoveries++
+                    if (recoveries > 3) throw Stop("Tab Hadiah tidak terbuka setelah beberapa kali. Teks layar: " + lastTxt)
+                    log("Tab Hadiah belum terbuka setelah " + failTaps + " ketukan. Back ke lobby, lalu ketuk Event dan petir lagi")
+                    back()
+                    failTaps = 0
                 }
                 continue
             }
