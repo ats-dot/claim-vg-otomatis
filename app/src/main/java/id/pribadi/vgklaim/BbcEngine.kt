@@ -790,7 +790,7 @@ object BbcEngine {
             Engine.alive()
             val s = cap()
             val lobby = Engine.isLobby(s) && !Engine.eventOpen(s)
-            if (lobby && !s.has("seasonsaatini", "telahmengirimkanlike", "tambahkanteman")) return
+            if (lobby && !s.has("seasonsaatini", "telahmengirimkanlike", "tambahkanteman", "hadiahgratis", "belumdiklaimhariini")) return
             backAndWait(s.all)
         }
         Engine.backToLobby()
