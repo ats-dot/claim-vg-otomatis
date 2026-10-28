@@ -355,8 +355,8 @@ object BbcEngine {
             val cari = dlg.lines.first { it.norm.contains("cariid") }
             val before = firstRowSig(dlg)
             quickTap(cari.cx, cari.cy, "Cari ID")
-            searchAndOpen(before)
-            openProfileFull()
+            val card = searchAndOpen(before, cari)
+            openProfileFull(card)
             val first = Prefs.bbcPendSent == 0
             openLiveStream(if (first) "before.png" else null, true)
             sendYacht()
@@ -403,6 +403,20 @@ object BbcEngine {
         }
     }
 
+    private var lastTonton: Pair<Float, Float>? = null
+
+    // Ketuk lalu tunggu layar tujuan. Kalau belum muncul dalam 1 detik, baca ulang dan ketuk SATU kali lagi, lalu tunggu lebih lama
+    private fun tapRetry(x: Float, y: Float, why: String, ready: (Scr) -> Boolean, waitMs: Long, failMsg: String): Scr {
+        quickTap(x, y, why)
+        val r = waitFor(1000) { ready(it) }
+        if (r != null) return r
+        val c = cap()
+        if (ready(c)) return c
+        log("Belum terbuka setelah 1 detik, mengetuk sekali lagi: " + why)
+        quickTap(x, y, why + " (ulang)")
+        return waitFor(waitMs) { ready(it) } ?: throw Engine.Stop(failMsg)
+    }
+
     // Tangani popup di lobby sampai layar bersih (popup biasa, popup gelap tanpa tombol, Mastery Code, dialog Keluar, dan lainnya)
     private fun clearLobbyPopups(): Scr {
         for (i in 0 until 10) {
@@ -417,16 +431,30 @@ object BbcEngine {
 
     // Ketuk sebuah titik di lobby setelah layar dipastikan bebas popup. Kalau layar tujuan tidak terbuka, periksa popup:
     // ada popup berarti ketukan tadi terhalang, popup ditangani lalu ketuk lagi; tidak ada popup berarti berhenti dengan sebab jelas
-    private fun openFromLobby(fx: Float, fy: Float, why: String, ready: (Scr) -> Boolean, failMsg: String): Scr {
+    private fun openFromLobby(fx: Float, fy: Float, why: String, ready: (Scr) -> Boolean, failMsg: String, known: Scr? = null): Scr {
         for (attempt in 0 until 3) {
-            val lob = clearLobbyPopups()
-            quickTap(lob.w * fx, lob.h * fy, why)
-            val r = waitFor(5000) { ready(it) }
-            if (r != null) return r
-            val s = cap()
-            val popup = Engine.popups(s) || Engine.darkPopupX(s) || s.has("bintangkeberuntungan", "penawarankhusus")
-            if (!popup) throw Engine.Stop(failMsg)
+            val lob = if (known != null) known else clearLobbyPopups()
+            val x = lob.w * fx
+            val y = lob.h * fy
+            quickTap(x, y, why)
+            val r1 = waitFor(1000) { ready(it) }
+            if (r1 != null) return r1
+            val s0 = cap()
+            if (ready(s0)) return s0
+            // Belum terbuka: kalau ada popup, tangani dulu lalu ketuk lagi
+            if (Engine.popups(s0) || Engine.darkPopupX(s0) || s0.has("bintangkeberuntungan", "penawarankhusus")) {
+                log("Ketukan terhalang popup, popup ditangani lalu mengetuk lagi")
+                clearLobbyPopups()
+                continue
+            }
+            log("Belum terbuka setelah 1 detik, mengetuk sekali lagi: " + why)
+            quickTap(x, y, why + " (ulang)")
+            val r2 = waitFor(5000) { ready(it) }
+            if (r2 != null) return r2
+            val s1 = cap()
+            if (!(Engine.popups(s1) || Engine.darkPopupX(s1) || s1.has("bintangkeberuntungan", "penawarankhusus"))) throw Engine.Stop(failMsg)
             log("Ketukan terhalang popup, popup ditangani lalu mengetuk lagi")
+            clearLobbyPopups()
         }
         throw Engine.Stop(failMsg)
     }
@@ -546,8 +574,15 @@ object BbcEngine {
             ?: t.lines.firstOrNull { it.norm.length == 10 && lev(it.norm, "500diamond") <= 1 }
             ?: throw Engine.Stop("Kartu 500 Diamond tidak ketemu di menu Top Up")
         if (!firstBadge(t, card)) throw Skip("bonus Top Up Pertama 500 Diamond sudah terpakai", true)
-        tapXY(card.cx + t.w * 0.034f, card.cy + t.h * 0.12f, "kartu 500 Diamond")
-        val d = waitFor(3000) { it.has("pemberitahuansistem", "lanjutkan", "tidakcukup") }
+        val cx500 = card.cx + t.w * 0.034f
+        val cy500 = card.cy + t.h * 0.12f
+        quickTap(cx500, cy500, "kartu 500 Diamond")
+        var d = waitFor(1000) { it.has("pemberitahuansistem", "lanjutkan", "tidakcukup") }
+        if (d == null) {
+            log("Dialog harga belum muncul setelah 1 detik, mengetuk kartu sekali lagi")
+            quickTap(cx500, cy500, "kartu 500 Diamond (ulang)")
+            d = waitFor(2500) { it.has("pemberitahuansistem", "lanjutkan", "tidakcukup") }
+        }
         if (d == null || (d.has("tidakcukup") && !d.has("lanjutkan"))) {
             log("Dialog harga tidak muncul: Vanguard Coin tidak cukup")
             return 1
@@ -612,23 +647,14 @@ object BbcEngine {
     }
 
     // Satu bacaan layar untuk memastikan lobby (sekaligus mengecek popup Squad), lalu langsung mengetuk ikon orang +.
-    // Popup baru diperiksa kalau dialog tidak terbuka sesudah ketukan.
+    // Popup baru diperiksa kalau dialog tidak terbuka; ketukan ulang satu kali setelah 1 detik.
     private fun openFriendDialog() {
         val s = waitFor(8000) { sc ->
             (sc.has("tambahkanteman") && sc.has("cariid")) || (Engine.isLobby(sc) && !Engine.eventOpen(sc) && !sc.has("masterycode"))
         } ?: throw Engine.Stop("Lobby tidak siap untuk membuka dialog teman")
         if (s.has("tambahkanteman") && s.has("cariid")) return
         closeSquadPopup(s)
-        for (attempt in 0 until 3) {
-            quickTap(s.w * 0.893f, s.h * 0.679f, "ikon orang + (tambah teman)")
-            if (waitFor(5000) { it.has("tambahkanteman") } != null) return
-            val c = cap()
-            val popup = Engine.popups(c) || Engine.darkPopupX(c) || c.has("bintangkeberuntungan", "penawarankhusus")
-            if (!popup) throw Engine.Stop("Dialog Tambahkan Teman tidak terbuka")
-            log("Ketukan terhalang popup, popup ditangani lalu mengetuk lagi")
-            clearLobbyPopups()
-        }
-        throw Engine.Stop("Dialog Tambahkan Teman tidak terbuka")
+        openFromLobby(0.893f, 0.679f, "ikon orang + (tambah teman)", { it.has("tambahkanteman") }, "Dialog Tambahkan Teman tidak terbuka", s)
     }
 
     private fun typeId(id: String) {
@@ -638,11 +664,17 @@ object BbcEngine {
         val svc = ClaimService.inst ?: throw Engine.Stop("Layanan Aksesibilitas tidak aktif")
         // Isi seluruh ID sekaligus begitu papan ketik siap (ulangi tiap 0,2 detik, maksimal 4 detik)
         var r = ""
+        var retapped = false
         val t0 = now()
         while (now() - t0 < 4000) {
             Engine.alive()
             r = svc.inputText(id)
             if (r == "OK" || r.contains("jendela=0")) break
+            if (!retapped && now() - t0 > 1000) {
+                retapped = true
+                log("Papan ketik belum siap setelah 1 detik, mengetuk kotak ID sekali lagi")
+                quickTap(box?.cx ?: (s0.w * 0.298f), box?.cy ?: (s0.h * 0.222f), "kotak ID (ulang)")
+            }
             sleepMs(200)
         }
         log("Isi ID lewat Aksesibilitas: " + r)
@@ -769,24 +801,28 @@ object BbcEngine {
 
     private fun firstRowSig(s: Scr): String = rowCands(s).joinToString("|") { it.norm }
 
-    // Cari ID sudah diketuk (satu kali). Tunggu daftar berubah, lalu baca hasil teratas
-    private fun searchAndOpen(beforeSig: String) {
-        waitFor(9000) { firstRowSig(it) != beforeSig } ?: throw Engine.Stop("Hasil pencarian tidak berubah: ID tidak ditemukan atau Cari ID tidak terketuk")
+    // Cari ID sudah diketuk. Tunggu daftar berubah; kalau belum berubah setelah 1 detik, ketuk Cari ID SATU kali lagi.
+    // Lalu baca hasil teratas, ketuk akun itu (ulang sekali setelah 1 detik), dan kembalikan layar kartu profil
+    private fun searchAndOpen(beforeSig: String, cari: Line): Scr {
+        var ch = waitFor(1000) { firstRowSig(it) != beforeSig }
+        if (ch == null) {
+            log("Hasil pencarian belum berubah setelah 1 detik, mengetuk Cari ID sekali lagi")
+            quickTap(cari.cx, cari.cy, "Cari ID (ulang)")
+            ch = waitFor(9000) { firstRowSig(it) != beforeSig } ?: throw Engine.Stop("Hasil pencarian tidak berubah: ID tidak ditemukan atau Cari ID tidak terketuk")
+        }
         val fin = cap()
         val texts = rowCands(fin).map { it.text }
         log("Hasil teratas pencarian: " + texts.joinToString(" | "))
         if (Prefs.bbcMatchNick && !nickMatch(texts, Prefs.bbcNick)) {
             throw Engine.Stop("Nick hasil teratas (" + texts.joinToString(" ") + ") tidak cocok dengan " + Prefs.bbcNick.trim() + ". Pengiriman dihentikan")
         }
-        tapXY(fin.w * 0.417f, fin.h * 0.361f, "akun hasil teratas")
+        // Kartu profil dianggap terbuka kalau dialog pencarian (tombol Cari ID dan Cari Nama) sudah tidak terlihat
+        return tapRetry(fin.w * 0.417f, fin.h * 0.361f, "akun hasil teratas", { sc -> !sc.has("cariid") && !sc.has("carinama") }, 6500,
+            "Kartu profil tidak terbuka setelah mengetuk akun (dialog pencarian masih terlihat)")
     }
 
-    private fun openProfileFull() {
-        // Kartu profil dianggap terbuka kalau dialog pencarian (tombol Cari ID dan Cari Nama) sudah tidak terlihat;
-        // bentuk kartu berbeda-beda, jadi tidak mencari tulisan tertentu di dalamnya
-        val card = waitFor(6500) { sc -> !sc.has("cariid") && !sc.has("carinama") } ?: throw Engine.Stop("Kartu profil tidak terbuka setelah mengetuk akun (dialog pencarian masih terlihat)")
-        quickTap(card.w * 0.717f, card.h * 0.736f, "ikon pencarian (profil lengkap)")
-        val prof = waitFor(7000) { it.has("zonapribadi") } ?: throw Engine.Stop("Halaman Zona Pribadi tidak terbuka")
+    private fun openProfileFull(card: Scr) {
+        val prof = tapRetry(card.w * 0.717f, card.h * 0.736f, "ikon pencarian (profil lengkap)", { it.has("zonapribadi") }, 6000, "Halaman Zona Pribadi tidak terbuka")
         if (Prefs.bbcMatchNick) {
             // Judul "Zona Pribadi <nick>" dan nama besar di bawahnya; kata "Zona Pribadi" dan "Pengaturan" dibuang
             val head = prof.lines.filter { it.cy < prof.h * 0.22f && it.cx > prof.w * 0.15f }.map { it.text }
@@ -802,6 +838,13 @@ object BbcEngine {
         val s = waitFor(6000) { sc -> sc.lines.any { it.norm.contains("livestream") && it.cx < sc.w * 0.20f } } ?: throw Engine.Stop("Menu Live Stream tidak terbaca")
         val l = s.lines.first { it.norm.contains("livestream") && it.cx < s.w * 0.20f }
         quickTap(l.cx, l.cy, "menu Live Stream")
+        if (waitFor(1000) { it.has("catatanlivestream") } == null) {
+            val c1 = cap()
+            if (!c1.has("catatanlivestream")) {
+                log("Halaman Live Stream belum terbuka setelah 1 detik, mengetuk menu sekali lagi")
+                quickTap(l.cx, l.cy, "menu Live Stream (ulang)")
+            }
+        }
         var page: Scr? = null
         var tn: Line? = null
         val t0 = now()
@@ -817,7 +860,10 @@ object BbcEngine {
             sleepMs(60)
         }
         if (page == null || tn == null) throw Engine.Stop("Tombol Tonton tidak terlihat di halaman Live Stream")
-        if (thenTonton) quickTap(tn.cx, tn.cy, "Tonton")
+        if (thenTonton) {
+            lastTonton = Pair(tn.cx, tn.cy)
+            quickTap(tn.cx, tn.cy, "Tonton")
+        }
         if (shotName != null && saveShot(page.bmp, shotName)) log("Screenshot " + shotName + " disimpan (Pictures/VGKlaim)")
     }
 
@@ -832,9 +878,16 @@ object BbcEngine {
     // ---------- kirim Yacht ----------
 
     private fun sendYacht() {
-        val ch = waitFor(7000) { it.has("trendingpoint") } ?: throw Engine.Stop("Halaman Channel tidak terbuka")
-        quickTap(ch.w * 0.866f, ch.h * 0.946f, "ikon hadiah")
-        var g = waitFor(6000) { it.has("yacht") && it.has("airplane") } ?: throw Engine.Stop("Daftar hadiah (Yacht) tidak muncul")
+        var ch = waitFor(1000) { it.has("trendingpoint") }
+        if (ch == null) {
+            val tp = lastTonton
+            if (tp != null && !cap().has("trendingpoint")) {
+                log("Halaman Channel belum terbuka setelah 1 detik, mengetuk Tonton sekali lagi")
+                quickTap(tp.first, tp.second, "Tonton (ulang)")
+            }
+            ch = waitFor(6500) { it.has("trendingpoint") } ?: throw Engine.Stop("Halaman Channel tidak terbuka")
+        }
+        var g = tapRetry(ch.w * 0.866f, ch.h * 0.946f, "ikon hadiah", { it.has("yacht") && it.has("airplane") }, 6000, "Daftar hadiah (Yacht) tidak muncul")
         var y = g.lines.firstOrNull { it.norm == "yacht" } ?: g.find("yacht") ?: throw Engine.Stop("Tulisan Yacht tidak terbaca")
         // Panel hadiah naik dengan animasi: ketuk Yacht hanya kalau posisinya sama di dua bacaan berturut-turut (panel sudah diam)
         val tStable = now()
@@ -850,8 +903,7 @@ object BbcEngine {
         val before = panelDiamonds(g)
         // Dua kemungkinan yang tidak pernah muncul bersamaan: dialog Beri Hadiah (level cukup) atau tulisan
         // "Mencapai Lv ... untuk mengirim!" tanpa dialog (level kurang, server dilewati)
-        quickTap(y.cx, y.cy - g.h * 0.055f, "Yacht (1000 diamond)")
-        val d = waitFor(5000) { it.has("berihadiah") || it.has("mencapailv") } ?: throw Engine.Stop("Dialog Beri Hadiah tidak muncul")
+        val d = tapRetry(y.cx, y.cy - g.h * 0.055f, "Yacht (1000 diamond)", { it.has("berihadiah") || it.has("mencapailv") }, 4000, "Dialog Beri Hadiah tidak muncul")
         if (d.has("mencapailv") && !d.has("berihadiah")) throw Skip("level server belum cukup (Mencapai Lv ... untuk mengirim)")
         if (!d.has("kirimyacht")) throw Engine.Stop("Dialog Beri Hadiah bukan Yacht, tidak dikonfirmasi")
         val kb = d.lines.filter { it.norm == "konfirmasi" && it.cy > d.h * 0.60f }.firstOrNull() ?: d.find("konfirmasi") ?: throw Engine.Stop("Tombol Konfirmasi hadiah tidak terbaca")
