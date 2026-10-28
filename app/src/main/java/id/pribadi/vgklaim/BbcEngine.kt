@@ -404,6 +404,34 @@ object BbcEngine {
         }
     }
 
+    // Tangani popup di lobby sampai layar bersih (popup biasa, popup gelap tanpa tombol, Mastery Code, dialog Keluar, dan lainnya)
+    private fun clearLobbyPopups(): Scr {
+        for (i in 0 until 10) {
+            Engine.alive()
+            val s = cap()
+            if (Engine.popups(s)) continue
+            if (Engine.darkPopupX(s)) continue
+            return s
+        }
+        return cap()
+    }
+
+    // Ketuk sebuah titik di lobby setelah layar dipastikan bebas popup. Kalau layar tujuan tidak terbuka, periksa popup:
+    // ada popup berarti ketukan tadi terhalang, popup ditangani lalu ketuk lagi; tidak ada popup berarti berhenti dengan sebab jelas
+    private fun openFromLobby(fx: Float, fy: Float, why: String, ready: (Scr) -> Boolean, failMsg: String): Scr {
+        for (attempt in 0 until 3) {
+            val lob = clearLobbyPopups()
+            quickTap(lob.w * fx, lob.h * fy, why)
+            val r = waitFor(5000) { ready(it) }
+            if (r != null) return r
+            val s = cap()
+            val popup = Engine.popups(s) || Engine.darkPopupX(s) || s.has("bintangkeberuntungan", "penawarankhusus")
+            if (!popup) throw Engine.Stop(failMsg)
+            log("Ketukan terhalang popup, popup ditangani lalu mengetuk lagi")
+        }
+        throw Engine.Stop(failMsg)
+    }
+
     // ---------- diamond ----------
 
     // Ikon di kiri sebuah angka: biru = diamond, emas = Vanguard Coin
@@ -494,9 +522,7 @@ object BbcEngine {
 
     // 0 = berhasil (diamond 1000 sudah masuk dan kembali di lobby), 1 = Vanguard Coin tidak cukup (masih di menu Top Up)
     private fun buyDiamonds(): Int {
-        val l0 = cap()
-        tapXY(l0.w * 0.730f, l0.h * 0.054f, "tanda + di lobby (Top Up)")
-        var t = waitFor(7000) { isTopUp(it) } ?: throw Engine.Stop("Menu Top Up tidak terbuka")
+        var t = openFromLobby(0.730f, 0.054f, "tanda + di lobby (Top Up)", { isTopUp(it) }, "Menu Top Up tidak terbuka")
         // Harga harus dalam Vanguard Coin (mode diamond menampilkan harga Rupiah "Rp ..."). Ketuk Ganti SEKALI,
         // lalu tunggu sampai harganya berubah
         if (rpMode(t)) {
@@ -575,11 +601,10 @@ object BbcEngine {
 
     private fun openFriendDialog() {
         val s = waitFor(8000) { sc ->
-            (sc.has("tambahkanteman") && sc.has("cariid")) || (Engine.isLobby(sc) && !Engine.eventOpen(sc) && !sc.has("squadtersedia"))
+            (sc.has("tambahkanteman") && sc.has("cariid")) || (Engine.isLobby(sc) && !Engine.eventOpen(sc) && !sc.has("squadtersedia") && !sc.has("masterycode"))
         } ?: throw Engine.Stop("Lobby tidak siap untuk membuka dialog teman")
         if (s.has("tambahkanteman") && s.has("cariid")) return
-        quickTap(s.w * 0.893f, s.h * 0.679f, "ikon orang + (tambah teman)")
-        waitFor(6000) { it.has("tambahkanteman") } ?: throw Engine.Stop("Dialog Tambahkan Teman tidak terbuka")
+        openFromLobby(0.893f, 0.679f, "ikon orang + (tambah teman)", { it.has("tambahkanteman") }, "Dialog Tambahkan Teman tidak terbuka")
     }
 
     private fun typeId(id: String) {
@@ -817,6 +842,10 @@ object BbcEngine {
         for (i in 0 until 10) {
             Engine.alive()
             val s = cap()
+            if (s.has("masterycode")) {
+                Engine.waitMasteryCode()
+                continue
+            }
             val lobby = Engine.isLobby(s) && !Engine.eventOpen(s)
             if (lobby && !s.has("seasonsaatini", "telahmengirimkanlike", "tambahkanteman", "hadiahgratis", "belumdiklaimhariini")) return
             backAndWait(s.all)
