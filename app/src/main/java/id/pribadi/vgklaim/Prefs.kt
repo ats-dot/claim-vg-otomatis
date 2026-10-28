@@ -282,6 +282,25 @@ object Prefs {
         s().edit().putStringSet("bbc_used_" + acct, cur).apply()
     }
 
+    // Semua akun yang punya catatan server Kirim BBC: pasangan ID akun dan daftar server terpakai
+    fun bbcAccounts(): List<Pair<String, List<String>>> {
+        val ids = HashSet<String>()
+        for (k in s().all.keys) {
+            if (k.startsWith("bbc_used_")) ids.add(k.removePrefix("bbc_used_"))
+            else if (k.startsWith("bbc_last_")) ids.add(k.removePrefix("bbc_last_"))
+            else if (k.startsWith("bbc_try_")) ids.add(k.removePrefix("bbc_try_"))
+        }
+        return ids.sorted().map { id -> Pair(id, bbcUsed(id).toList().sorted()) }
+    }
+
+    fun bbcClearAllUsed() {
+        val ed = s().edit()
+        for (k in s().all.keys) {
+            if (k.startsWith("bbc_used_") || k.startsWith("bbc_last_") || k.startsWith("bbc_try_")) ed.remove(k)
+        }
+        ed.apply()
+    }
+
     fun bbcClearUsed(acct: String) {
         s().edit().remove("bbc_used_" + acct).remove("bbc_last_" + acct).remove("bbc_try_" + acct).apply()
     }
