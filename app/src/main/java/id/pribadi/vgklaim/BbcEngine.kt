@@ -21,6 +21,7 @@ object BbcEngine {
     @Volatile private var exhausted = false
     private var lastTarget = 0
     private val levelWarned = HashSet<String>()
+    private var startLogged = false
 
     // Dibaca saat lobby baru terdeteksi (selagi menunggu popup): bar atas masih menampilkan diamond
     @Volatile private var seenLevel: Int? = null
@@ -116,6 +117,19 @@ object BbcEngine {
         return digits.toIntOrNull()
     }
 
+    // Server bernomor di bawah "Mulai dari server" dianggap sudah terpakai dan tidak dikunjungi
+    fun belowStart(name: String): Boolean {
+        val st = Prefs.bbcStartFrom
+        if (st <= 0) return false
+        val v = name.filter { it.isDigit() }.toIntOrNull() ?: return false
+        if (v >= st) return false
+        if (!startLogged) {
+            startLogged = true
+            log("Server bernomor di bawah " + st + " dilewati (Mulai dari server)")
+        }
+        return true
+    }
+
     fun levelOk(name: String, s: Scr, row: Line): Boolean {
         val min = Prefs.bbcMinLevel
         val lv = rowLevel(s, row)
@@ -190,6 +204,7 @@ object BbcEngine {
         finished = false
         exhausted = false
         levelWarned.clear()
+        startLogged = false
 
         if (!setupOrder()) {
             finished = true
@@ -718,7 +733,9 @@ object BbcEngine {
     }
 
     private fun openProfileFull() {
-        val card = waitFor(6500) { it.has("seasonsaatini") } ?: throw Engine.Stop("Kartu profil tidak terbuka setelah mengetuk akun")
+        // Kartu profil dianggap terbuka kalau dialog pencarian (tombol Cari ID dan Cari Nama) sudah tidak terlihat;
+        // bentuk kartu berbeda-beda, jadi tidak mencari tulisan tertentu di dalamnya
+        val card = waitFor(6500) { sc -> !sc.has("cariid") && !sc.has("carinama") } ?: throw Engine.Stop("Kartu profil tidak terbuka setelah mengetuk akun (dialog pencarian masih terlihat)")
         quickTap(card.w * 0.717f, card.h * 0.736f, "ikon pencarian (profil lengkap)")
         val prof = waitFor(7000) { it.has("zonapribadi") } ?: throw Engine.Stop("Halaman Zona Pribadi tidak terbuka")
         if (Prefs.bbcMatchNick) {
