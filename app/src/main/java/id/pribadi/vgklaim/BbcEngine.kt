@@ -72,17 +72,17 @@ object BbcEngine {
         val id = Prefs.bbcId.trim()
         if (id.isEmpty() || !id.all { it.isDigit() }) return "Isi ID penerima dulu (angka)"
         val a = Prefs.bbcAmount
-        if (a <= 0 || a % UNIT != 0) return "Jumlah BBC harus kelipatan 1000"
+        if (a <= 0 || a % UNIT != 0) return "Isi Jumlah BBC dalam ribuan (mis. 20 untuk 20.000 BBC)"
         if (Prefs.bbcMatchNick && Prefs.bbcNick.trim().isEmpty()) return "Isi nick dulu, atau matikan Cocokkan nick"
         return null
     }
 
     fun bannerText(stopped: Boolean): String {
-        if (finished) return "Selesai, " + lastTarget + " BBC terkirim"
+        if (finished) return "Selesai, " + Prefs.fmt(lastTarget) + " BBC terkirim"
         val s = Prefs.bbcPendSent
         val t = Prefs.bbcPendTarget
-        if (exhausted) return "Server akun ini habis: terkirim " + s + " dari " + t + " BBC. Ganti akun lalu lanjutkan"
-        return "Berhenti: terkirim " + s + " dari " + t + " BBC"
+        if (exhausted) return "Server akun ini habis: terkirim " + Prefs.fmt(s) + " dari " + Prefs.fmt(t) + " BBC. Ganti akun lalu lanjutkan"
+        return "Berhenti: terkirim " + Prefs.fmt(s) + " dari " + Prefs.fmt(t) + " BBC"
     }
 
     private fun setupOrder(): Boolean {
@@ -90,17 +90,17 @@ object BbcEngine {
         val amt = Prefs.bbcAmount
         if (Prefs.bbcPendId == id && Prefs.bbcPendTarget > 0) {
             if (Prefs.bbcPendSent >= amt) {
-                log("Pesanan ke ID " + id + " sudah terkirim " + Prefs.bbcPendSent + " BBC. Tidak ada yang dikirim")
+                log("Pesanan ke ID " + id + " sudah terkirim " + Prefs.fmt(Prefs.bbcPendSent) + " BBC. Tidak ada yang dikirim")
                 Prefs.bbcClearPending()
                 return false
             }
             Prefs.bbcPendTarget = amt
-            log("Melanjutkan pesanan ke ID " + id + ": terkirim " + Prefs.bbcPendSent + " dari " + amt + " BBC")
+            log("Melanjutkan pesanan ke ID " + id + ": terkirim " + Prefs.fmt(Prefs.bbcPendSent) + " dari " + Prefs.fmt(amt) + " BBC")
         } else {
             Prefs.bbcPendId = id
             Prefs.bbcPendTarget = amt
             Prefs.bbcPendSent = 0
-            log("Pesanan baru ke ID " + id + ": 0 dari " + amt + " BBC")
+            log("Pesanan baru ke ID " + id + ": 0 dari " + Prefs.fmt(amt) + " BBC")
         }
         lastTarget = amt
         return true
@@ -291,7 +291,7 @@ object BbcEngine {
             val next = Engine.pickNext()
             if (next == null) {
                 exhausted = true
-                log("Server di akun ini habis. Terkirim " + Prefs.bbcPendSent + " dari " + Prefs.bbcPendTarget + " BBC")
+                log("Server di akun ini habis. Terkirim " + Prefs.fmt(Prefs.bbcPendSent) + " dari " + Prefs.fmt(Prefs.bbcPendTarget) + " BBC")
                 break
             }
             Engine.switchTo(next)
@@ -359,7 +359,7 @@ object BbcEngine {
             } else if (Engine.acct != "-") {
                 Prefs.bbcSetTry(Engine.acct, "!")
             }
-            log("Kiriman berhasil di " + label + ": terkirim " + sentNow + " dari " + Prefs.bbcPendTarget + " BBC (" + ((now() - t0) / 1000) + " dtk)")
+            log("Kiriman berhasil di " + label + ": terkirim " + Prefs.fmt(sentNow) + " dari " + Prefs.fmt(Prefs.bbcPendTarget) + " BBC (" + ((now() - t0) / 1000) + " dtk)")
             // kembali ke profil
             Engine.back()
             waitFor(4000) { it.has("zonapribadi") }
@@ -368,7 +368,7 @@ object BbcEngine {
                 lastTarget = Prefs.bbcPendTarget
                 Prefs.bbcClearPending()
                 finished = true
-                log("SELESAI. Pesanan " + lastTarget + " BBC terkirim ke ID " + Prefs.bbcId.trim())
+                log("SELESAI. Pesanan " + Prefs.fmt(lastTarget) + " BBC terkirim ke ID " + Prefs.bbcId.trim())
             }
             toLobby()
             seenLevel = null
@@ -989,10 +989,15 @@ object BbcEngine {
         try {
             val res = ctx.contentResolver
             try {
+                // Hapus nama polos dan juga salinan bernomor milik sendiri (mis. "before (3).png") supaya tidak menumpuk
+                val dot = name.lastIndexOf('.')
+                val stem = if (dot > 0) name.substring(0, dot) else name
+                val ext = if (dot > 0) name.substring(dot) else ""
                 res.delete(
                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    MediaStore.Images.Media.DISPLAY_NAME + "=? AND " + MediaStore.Images.Media.RELATIVE_PATH + " LIKE ?",
-                    arrayOf(name, "Pictures/VGKlaim%")
+                    "(" + MediaStore.Images.Media.DISPLAY_NAME + "=? OR " + MediaStore.Images.Media.DISPLAY_NAME + " LIKE ?) AND " +
+                        MediaStore.Images.Media.RELATIVE_PATH + " LIKE ?",
+                    arrayOf(name, stem + " (%)" + ext, "Pictures/VGKlaim%")
                 )
             } catch (_: Throwable) {
             }

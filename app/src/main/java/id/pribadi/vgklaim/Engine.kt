@@ -97,7 +97,7 @@ object Engine {
         Prefs.init(ctx)
         if (running) return "Sudah berjalan"
         if (Prefs.serverCount < 2) return "Isi Jumlah server dulu (angka 2 atau lebih)"
-        if (ClaimService.inst == null) return "Aktifkan dulu Aksesibilitas VG Klaim (tab Pengaturan)"
+        if (ClaimService.inst == null) return "Aktifkan dulu Aksesibilitas Klaim & Kirim (tab Pengaturan)"
         if (m == 1) {
             val err = BbcEngine.validate()
             if (err != null) return err
@@ -109,7 +109,7 @@ object Engine {
         status = "Berjalan"
         val fe = KeepAliveService.start(ctx.applicationContext)
         if (fe != null) log("Layanan latar gagal dimulai (" + fe + "). Klaim tetap jalan tanpa layanan latar.")
-        else log("Layanan latar dimulai (notifikasi VG Klaim berjalan)")
+        else log("Layanan latar dimulai (notifikasi Klaim & Kirim berjalan)")
         total = 0
         doneCount = 0
         lastActive = now()
@@ -305,7 +305,7 @@ object Engine {
             }
             if (tries == 6 && !recovered) {
                 recovered = true
-                log("Percobaan pemulihan: membawa VG Klaim ke depan sebentar, lalu membuka game lagi")
+                log("Percobaan pemulihan: membawa Klaim & Kirim ke depan sebentar, lalu membuka game lagi")
                 try {
                     val c = app
                     if (c != null) {
@@ -2226,7 +2226,7 @@ object Engine {
         }
         // Langsung pindah, tanpa menutup game dan tanpa membuka Recents
         if (mode == 1) {
-            log("Setelah selesai: langsung kembali ke VG Klaim")
+            log("Setelah selesai: langsung kembali ke Klaim & Kirim")
             openOwnApp()
         } else {
             log("Setelah selesai: langsung ke Home")
@@ -2574,7 +2574,7 @@ object Engine {
                 }
                 }
                 log("DIAGNOSA selesai. Salin log di tab Log dan kirim ke Claude.")
-                ClaimService.inst?.banner("Diagnosa selesai. Buka VG Klaim > Log", 15000L, false)
+                ClaimService.inst?.banner("Diagnosa selesai. Buka Klaim & Kirim > Log", 15000L, false)
             } catch (e: Throwable) {
                 log("DIAGNOSA error: " + e.message)
             } finally {

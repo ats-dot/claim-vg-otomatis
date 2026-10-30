@@ -139,7 +139,7 @@ class ClaimService : AccessibilityService() {
 
     private val ui = Handler(Looper.getMainLooper())
 
-    // Banner melayang di atas layar apa pun (biru malam dan emas), hilang sendiri. Tanpa izin tambahan.
+    // Banner melayang di atas layar apa pun (hitam dan perak), hilang sendiri. Tanpa izin tambahan.
     fun banner(text: String, ms: Long = 10000L, notify: Boolean = true) {
         if (notify) notifyDone(text)
         ui.post {
@@ -148,13 +148,13 @@ class ClaimService : AccessibilityService() {
                 val d = resources.displayMetrics.density
                 val tv = TextView(this)
                 tv.text = text
-                tv.setTextColor(Color.parseColor("#E9ECF5"))
+                tv.setTextColor(Color.parseColor("#F2F4F8"))
                 tv.textSize = 15f
                 tv.gravity = Gravity.CENTER
                 tv.setPadding((20 * d).toInt(), (12 * d).toInt(), (20 * d).toInt(), (12 * d).toInt())
                 val bg = GradientDrawable()
-                bg.setColor(Color.parseColor("#0A0F1E"))
-                bg.setStroke(maxOf(1, (1.5f * d).toInt()), Color.parseColor("#E2C275"))
+                bg.setColor(Color.parseColor("#101216"))
+                bg.setStroke(maxOf(1, (1.5f * d).toInt()), Color.parseColor("#C9CEDA"))
                 bg.cornerRadius = 18 * d
                 tv.background = bg
                 val lp = WindowManager.LayoutParams(
@@ -238,11 +238,11 @@ class ClaimService : AccessibilityService() {
                 NotificationChannel("vgklaim_selesai", "Hasil klaim", NotificationManager.IMPORTANCE_HIGH)
             )
             val n = Notification.Builder(this, "vgklaim_selesai")
-                .setContentTitle("VG Klaim")
+                .setContentTitle("Klaim & Kirim")
                 .setContentText(text)
                 .setSmallIcon(R.drawable.ic_stat_vg)
                 .setLargeIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_launcher))
-                .setColor(Color.parseColor("#E2C275"))
+                .setColor(Color.parseColor("#C9CEDA"))
                 .setAutoCancel(true)
                 .build()
             nm.notify(2, n)

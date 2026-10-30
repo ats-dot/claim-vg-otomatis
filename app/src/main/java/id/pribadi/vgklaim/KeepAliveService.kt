@@ -11,7 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 
-// Layanan latar (dengan notifikasi) supaya sistem menganggap VG Klaim sedang bekerja
+// Layanan latar (dengan notifikasi) supaya sistem menganggap Klaim & Kirim sedang bekerja
 // dan tidak membatasi CPU-nya saat game terbuka di depan.
 class KeepAliveService : Service() {
 
@@ -48,7 +48,7 @@ class KeepAliveService : Service() {
         try {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(
-                NotificationChannel(CH, "VG Klaim berjalan", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(CH, "Klaim & Kirim berjalan", NotificationManager.IMPORTANCE_LOW)
             )
             val stopIntent = Intent(this, KeepAliveService::class.java).setAction(ACT_STOP)
             val stopPi = PendingIntent.getService(this, 7, stopIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -56,12 +56,12 @@ class KeepAliveService : Service() {
                 android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_stat_vg), "Berhenti", stopPi
             ).build()
             val n = Notification.Builder(this, CH)
-                .setContentTitle(if (Engine.mode == 1) "Kirim BBC berjalan" else "VG Klaim berjalan")
+                .setContentTitle(if (Engine.mode == 1) "Kirim BBC berjalan" else "Klaim VG berjalan")
                 .setContentText(if (Engine.mode == 1) "Kirim BBC sedang berjalan" else "Klaim otomatis sedang berjalan")
                 .addAction(stopAction)
                 .setSmallIcon(R.drawable.ic_stat_vg)
                 .setLargeIcon(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_launcher))
-                .setColor(android.graphics.Color.parseColor("#E2C275"))
+                .setColor(android.graphics.Color.parseColor("#C9CEDA"))
                 .setOngoing(true)
                 .build()
             if (Build.VERSION.SDK_INT >= 34) {

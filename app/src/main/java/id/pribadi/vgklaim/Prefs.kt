@@ -45,13 +45,13 @@ object Prefs {
         get() = s().getInt("dot_style", 5)
         set(v) { s().edit().putInt("dot_style", v).apply() }
 
-    // Jeda sesudah tiap ketukan (ms). Bawaan 0: ketukan berikutnya menunggu pengecekan layar (OCR), bukan waktu tetap
+    // Jeda sesudah tiap ketukan (ms). Bawaan 400 (pengaturan iQOO); 0 berarti ketukan berikutnya hanya menunggu pengecekan layar
     var stepMs: Int
-        get() = s().getInt("step_ms0", 0)
+        get() = s().getInt("step_ms0", 400)
         set(v) { s().edit().putInt("step_ms0", v.coerceIn(0, 3000)).apply() }
 
     var swipeHardMs: Int
-        get() = s().getInt("swipe_hard_ms", 150)
+        get() = s().getInt("swipe_hard_ms", 50)
         set(v) { s().edit().putInt("swipe_hard_ms", v.coerceIn(40, 400)).apply() }
 
     var swipeStart: Int
@@ -67,7 +67,7 @@ object Prefs {
         set(v) { s().edit().putInt("swipe_x", v.coerceIn(10, 95)).apply() }
 
     var swipeSlowMs: Int
-        get() = s().getInt("swipe_slow_ms", 200)
+        get() = s().getInt("swipe_slow_ms", 170)
         set(v) { s().edit().putInt("swipe_slow_ms", v.coerceIn(100, 1000)).apply() }
 
     // Jumlah server untuk Uji sampai bawah
@@ -77,11 +77,11 @@ object Prefs {
 
     // Geser pelan (menggeser daftar maju) dan geser balik (menggeser daftar mundur), semua dalam persen tinggi layar
     var swipeSlowStart: Int
-        get() = s().getInt("swipe_slow_start", 60)
+        get() = s().getInt("swipe_slow_start", 58)
         set(v) { s().edit().putInt("swipe_slow_start", v.coerceIn(0, 100)).apply() }
 
     var swipeSlowEnd: Int
-        get() = s().getInt("swipe_slow_end", 47)
+        get() = s().getInt("swipe_slow_end", 45)
         set(v) { s().edit().putInt("swipe_slow_end", v.coerceIn(0, 100)).apply() }
 
     var swipeBackStart: Int
@@ -96,14 +96,17 @@ object Prefs {
         get() = s().getInt("swipe_back_ms", 200)
         set(v) { s().edit().putInt("swipe_back_ms", v.coerceIn(100, 1000)).apply() }
 
+    // Angka dengan titik ribuan, mis. 5.000
+    fun fmt(n: Int): String = String.format(Locale("id", "ID"), "%,d", n)
+
     fun resetSwipe() {
-        swipeHardMs = 150
+        swipeHardMs = 50
         swipeStart = 55
         swipeEnd = 10
         swipeX = 77
-        swipeSlowMs = 200
-        swipeSlowStart = 60
-        swipeSlowEnd = 47
+        swipeSlowMs = 170
+        swipeSlowStart = 58
+        swipeSlowEnd = 45
         swipeBackStart = 45
         swipeBackEnd = 58
         swipeBackMs = 200
@@ -231,7 +234,7 @@ object Prefs {
         get() = s().getString("bbc_nick", "") ?: ""
         set(v) { s().edit().putString("bbc_nick", v).apply() }
 
-    // Jumlah BBC yang ingin dikirim (kelipatan 1000)
+    // Jumlah BBC yang ingin dikirim, dalam BBC penuh (kelipatan 1000). Di layar diisi dalam ribuan (k)
     var bbcAmount: Int
         get() = s().getInt("bbc_amount", 0)
         set(v) { s().edit().putInt("bbc_amount", v).apply() }
