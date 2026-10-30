@@ -958,7 +958,12 @@ class MainActivity : Activity() {
             t.trim().toIntOrNull()?.let { Prefs.serverCount = it }
         }
         cnt.hint = "Wajib diisi"
-        col.addView(card(row("Jumlah server", cnt)), lpw(0, 14))
+        col.addView(
+            card(
+                row("Jumlah server", cnt), divider(),
+                switchRow("Topup", { Prefs.topUp }, { Prefs.topUp = it })
+            ), lpw(0, 14)
+        )
 
         val spacer = View(this)
         col.addView(spacer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -1516,6 +1521,7 @@ class MainActivity : Activity() {
         "Baterai" to "Atur ke tanpa batasan supaya sistem tidak membatasi kecepatan baca layar.",
         "Aplikasi game" to "Pilih aplikasi Mobile Legends yang dibuka bot.",
         "Jumlah server" to "Isi jumlah semua server akun ini, termasuk server yang sedang dipakai (awalnya 20). Wajib diisi. Bot terus mencari sampai semua server terlihat, dan tidak berhenti sebelum itu.",
+        "Topup" to "Di Beranda, Klaim VG. Kalau aktif, di tiap server sesudah semua klaim selesai dan sebelum pindah ke server berikutnya, bot membeli 500 Diamond (bonus Top Up Pertama) dengan Vanguard Coin hasil klaim. Kalau Vanguard Coin kurang atau bonus server itu sudah terpakai, bot mencatatnya di log lalu lanjut pindah server. Menambah sekitar 6 sampai 10 detik per server.",
         "Setelah selesai" to "Yang dilakukan bot setelah semua server selesai. Klaim VG: langsung membuka aplikasi ini. Home: langsung ke layar Home. Tetap di game: kembali ke lobby dan tetap di game. Game tidak ditutup dan tidak dibuang dari Recents. Banner hasil klaim selalu tampil.",
         "Lewati server di atas posisi sekarang" to "Server yang urutannya di atas server awal dianggap sudah selesai dan tidak diklaim.",
         "Klaim Verifikasi Usia" to "Kalau aktif, di tiap server bot juga mengklaim Verifikasi Usia (satu kali per server): Klaim Semua, Gunakan sekarang, geser peti ke kartu Vanguard Coin, tombol +, Konfirmasi, lalu OK. Hasilnya Vanguard Coin 300. Kalau sudah diklaim atau menunya tidak ada, bot langsung lanjut.",

@@ -117,6 +117,11 @@ object Prefs {
         get() = s().getBoolean("claim_age", true)
         set(v) { s().edit().putBoolean("claim_age", v).apply() }
 
+    // Saklar Topup (Beranda, Klaim VG): di tiap server, sesudah klaim dan sebelum pindah server, beli 500 Diamond dengan Vanguard Coin
+    var topUp: Boolean
+        get() = s().getBoolean("topup_claim", false)
+        set(v) { s().edit().putBoolean("topup_claim", v).apply() }
+
     var dotAuto: Boolean
         get() = s().getBoolean("dot_auto", true)
         set(v) { s().edit().putBoolean("dot_auto", v).apply() }

@@ -538,6 +538,27 @@ object BbcEngine {
     private fun rpMode(s: Scr): Boolean = Regex("rp[0-9]{4,}").containsMatchIn(s.all)
 
     // 0 = berhasil (diamond 1000 sudah masuk dan kembali di lobby), 1 = Vanguard Coin tidak cukup (masih di menu Top Up)
+    // Dipakai Klaim VG (saklar Topup): satu kali alur Top Up di server ini. Kegagalan tidak menghentikan klaim:
+    // koin kurang, bonus sudah terpakai, atau menu tidak terbuka hanya dicatat di log, lalu lanjut pindah server
+    internal fun topUpOnly() {
+        Engine.status = "Topup di server ini"
+        try {
+            val r = buyDiamonds()
+            if (r != 0) {
+                log("Topup dilewati: Vanguard Coin belum cukup")
+                Engine.backToLobby()
+            }
+        } catch (e: Skip) {
+            log("Topup dilewati: " + e.why)
+            Engine.backToLobby()
+        } catch (e: Engine.Stop) {
+            val m = e.message ?: ""
+            if (m == "Dihentikan" || m.startsWith("20 menit")) throw e
+            log("Topup gagal, lanjut ke server berikutnya: " + m)
+            Engine.backToLobby()
+        }
+    }
+
     private fun buyDiamonds(): Int {
         var t = openFromLobby(0.730f, 0.054f, "tanda + di lobby (Top Up)", { isTopUp(it) }, "Menu Top Up tidak terbuka")
         // Harga harus dalam Vanguard Coin (mode diamond menampilkan harga Rupiah "Rp ..."). Ketuk Ganti, tunggu 1 detik;

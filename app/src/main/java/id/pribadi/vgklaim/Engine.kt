@@ -2189,12 +2189,19 @@ object Engine {
         doneCount = all.size
     }
 
+    // Saklar Topup (Beranda, Klaim VG): beli 500 Diamond dengan Vanguard Coin sebelum pindah server
+    private fun topUpStep() {
+        if (!Prefs.topUp) return
+        BbcEngine.topUpOnly()
+    }
+
     private fun claimServer(name: String) {
         serverT0 = now()
         resetStats()
         status = "Klaim " + name
         log("===== SERVER " + name + " =====")
         claimEvents()
+        topUpStep()
         log("Waktu klaim " + name + ": " + ((now() - serverT0) / 1000) + " dtk, " + statLine())
         done.add(name)
         Prefs.addDone(name, acct)
@@ -2277,6 +2284,7 @@ object Engine {
         resetStats()
         log("===== SERVER AWAL =====")
         claimEvents()
+        topUpStep()
         log("Waktu klaim server awal: " + ((now() - serverT0) / 1000) + " dtk, " + statLine())
         firstPending = true
 
