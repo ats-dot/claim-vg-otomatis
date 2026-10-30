@@ -737,37 +737,25 @@ object BbcEngine {
         return false
     }
 
-    // Simpan isian dan tutup papan ketik dengan tombol OK di bilah isian. Back TIDAK dipakai di sini karena membatalkan isian
-    // (ID terhapus). Urutan: klik OK lewat node Aksesibilitas (cepat), lalu OK terbaca dari layar, dan Back hanya cadangan terakhir
+    // Simpan isian dan tutup papan ketik dengan tombol OK di bilah putih di atas papan ketik. Back TIDAK dipakai karena
+    // membatalkan isian (ID terhapus). Papan ketik dianggap terbuka selama tombol OK di bilah itu terbaca di layar
+    // (deteksi jendela papan ketik tidak andal di semua HP). Ketukan pertama lewat node Aksesibilitas (cepat),
+    // sisanya lewat OK yang terbaca dari layar. Papan ketik harus benar-benar tertutup sebelum Cari ID diketuk
     private fun commitKeyboard(svc: ClaimService) {
-        if (!svc.keyboardVisible()) {
-            val s0 = cap()
-            if (!keyboardUp(null, s0, false)) return
-        }
-        val t0 = now()
-        while (now() - t0 < 1200) {
+        for (attempt in 0 until 3) {
             Engine.alive()
-            if (!svc.keyboardVisible()) return
-            if (svc.clickInputOk()) {
+            if (attempt == 0 && svc.clickInputOk()) {
                 log("Ketuk: OKE (selesai mengisi ID)")
-                if (waitKeyboardGone(svc, 1500)) return
-                break
-            }
-            sleepMs(60)
-        }
-        for (attempt in 0 until 2) {
-            Engine.alive()
-            val s = waitFor(2500) { sc -> !keyboardUp(svc, sc, false) || okLine(sc) != null } ?: break
-            if (!keyboardUp(svc, s, false)) return
-            val ok = okLine(s)
-            if (ok != null) {
+            } else {
+                // Tidak ada tombol OK dalam beberapa detik berarti memang tidak ada papan ketik yang perlu ditutup
+                val s = waitFor(if (attempt == 0) 2500L else 1200L) { okLine(it) != null } ?: return
+                val ok = okLine(s) ?: return
                 tapLine(ok, "OKE (selesai mengisi ID)")
-                if (waitKeyboardGone(svc, 1500)) return
             }
+            if (waitFor(1800) { okLine(it) == null && it.has("cariid") } != null) return
+            log("Papan ketik belum tertutup, mencoba lagi")
         }
-        log("Tombol OK tidak terbaca, menutup papan ketik dengan Back")
-        Engine.back()
-        waitKeyboardGone(svc, 1500)
+        throw Engine.Stop("Papan ketik tidak tertutup setelah mengetuk OK")
     }
 
     private fun pressOke() {
