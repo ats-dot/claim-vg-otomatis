@@ -266,6 +266,44 @@ class ClaimService : AccessibilityService() {
 
 
     // Mengisi kotak teks yang sedang fokus (kotak ID). Mengembalikan "OK" kalau berhasil, selain itu keterangan untuk log.
+    // Klik tombol OK pada bilah isian lewat node Aksesibilitas (lebih cepat daripada membaca layar). false kalau tidak ketemu
+    fun clickInputOk(): Boolean {
+        try {
+            val roots = ArrayList<android.view.accessibility.AccessibilityNodeInfo>()
+            try {
+                for (w in windows) {
+                    if (w.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue
+                    val r = w.root
+                    if (r != null) roots.add(r)
+                }
+            } catch (_: Throwable) {
+            }
+            for (r in roots) {
+                val n = findOkNode(r, 0) ?: continue
+                var cur: android.view.accessibility.AccessibilityNodeInfo? = n
+                var depth = 0
+                while (cur != null && depth < 4) {
+                    if (cur.isClickable && cur.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)) return true
+                    cur = cur.parent
+                    depth++
+                }
+            }
+        } catch (_: Throwable) {
+        }
+        return false
+    }
+
+    private fun findOkNode(n: android.view.accessibility.AccessibilityNodeInfo?, depth: Int): android.view.accessibility.AccessibilityNodeInfo? {
+        if (n == null || depth > 14) return null
+        val t = (n.text?.toString() ?: n.contentDescription?.toString() ?: "").trim().lowercase()
+        if (t == "ok" || t == "oke" || t == "selesai") return n
+        for (i in 0 until n.childCount) {
+            val r = findOkNode(n.getChild(i), depth + 1)
+            if (r != null) return r
+        }
+        return null
+    }
+
     // Apakah papan ketik (jendela IME) sedang tampil
     fun keyboardVisible(): Boolean {
         return try {

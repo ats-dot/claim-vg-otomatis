@@ -724,29 +724,50 @@ object BbcEngine {
         return (digits && digitKeys(s) != null) || s.has("bahasaindonesia") || (s.has("indonesia") && (s.has("tambahkanteman") || s.has("cariid")))
     }
 
-    // Simpan isian dan tutup papan ketik dengan tombol OK di bilah isian. Back TIDAK dipakai di sini karena membatalkan isian
-    // (ID terhapus). Back hanya cadangan terakhir kalau tombol OK tidak pernah terbaca
-    private fun commitKeyboard(svc: ClaimService) {
-        for (attempt in 0 until 3) {
+    private fun okLine(s: Scr): Line? =
+        s.lines.firstOrNull { (it.norm == "oke" || it.norm == "ok" || it.norm == "selesai") && it.cx > s.w * 0.80f && it.cy < s.h * 0.45f }
+
+    private fun waitKeyboardGone(svc: ClaimService, ms: Long): Boolean {
+        val t0 = now()
+        while (now() - t0 < ms) {
             Engine.alive()
-            val s = cap()
-            if (!keyboardUp(svc, s)) return
-            val ok = s.lines.firstOrNull { (it.norm == "oke" || it.norm == "ok" || it.norm == "selesai") && it.cx > s.w * 0.80f && it.cy < s.h * 0.45f }
+            if (!svc.keyboardVisible()) return true
+            sleepMs(50)
+        }
+        return false
+    }
+
+    // Simpan isian dan tutup papan ketik dengan tombol OK di bilah isian. Back TIDAK dipakai di sini karena membatalkan isian
+    // (ID terhapus). Urutan: klik OK lewat node Aksesibilitas (cepat), lalu OK terbaca dari layar, dan Back hanya cadangan terakhir
+    private fun commitKeyboard(svc: ClaimService) {
+        if (!svc.keyboardVisible()) {
+            val s0 = cap()
+            if (!keyboardUp(null, s0, false)) return
+        }
+        val t0 = now()
+        while (now() - t0 < 1200) {
+            Engine.alive()
+            if (!svc.keyboardVisible()) return
+            if (svc.clickInputOk()) {
+                log("Ketuk: OKE (selesai mengisi ID)")
+                if (waitKeyboardGone(svc, 1500)) return
+                break
+            }
+            sleepMs(60)
+        }
+        for (attempt in 0 until 2) {
+            Engine.alive()
+            val s = waitFor(2500) { sc -> !keyboardUp(svc, sc, false) || okLine(sc) != null } ?: break
+            if (!keyboardUp(svc, s, false)) return
+            val ok = okLine(s)
             if (ok != null) {
                 tapLine(ok, "OKE (selesai mengisi ID)")
-            } else if (attempt == 2) {
-                log("Tombol OK tidak terbaca, menutup papan ketik dengan Back")
-                Engine.back()
-            } else {
-                sleepMs(300)
-            }
-            val t0 = now()
-            while (now() - t0 < 1500) {
-                Engine.alive()
-                if (!svc.keyboardVisible() && !keyboardUp(null, cap(), false)) return
-                sleepMs(80)
+                if (waitKeyboardGone(svc, 1500)) return
             }
         }
+        log("Tombol OK tidak terbaca, menutup papan ketik dengan Back")
+        Engine.back()
+        waitKeyboardGone(svc, 1500)
     }
 
     private fun pressOke() {
@@ -945,6 +966,14 @@ object BbcEngine {
         return Pair(p1.cx, p1.cy - s.h * 0.086f)
     }
 
+    // Nama item kadang tidak tampil di dialog ("Kirim  ke Streamer!"). Kenali Yacht dari baris Harga 1000
+    private fun yachtDialogByPrice(d: Scr): Boolean {
+        if (!d.has("harga")) return false
+        return d.lines.any {
+            it.norm.endsWith("1000") && it.cx > d.w * 0.55f && it.cx < d.w * 0.72f && it.cy > d.h * 0.55f && it.cy < d.h * 0.72f
+        }
+    }
+
     private fun sendYacht() {
         var ch = waitFor(1000) { it.has("trendingpoint") }
         if (ch == null) {
@@ -973,7 +1002,7 @@ object BbcEngine {
         // "Mencapai Lv ... untuk mengirim!" tanpa dialog (level kurang, server dilewati)
         val d = tapRetry(yp.first, yp.second, "Yacht (1000 diamond)", { it.has("berihadiah") || it.has("mencapailv") }, 4000, "Dialog Beri Hadiah tidak muncul")
         if (d.has("mencapailv") && !d.has("berihadiah")) throw Skip("level server belum cukup (Mencapai Lv ... untuk mengirim)")
-        if (!d.has("kirimyacht")) throw Engine.Stop("Dialog Beri Hadiah bukan Yacht, tidak dikonfirmasi")
+        if (!d.has("kirimyacht") && !yachtDialogByPrice(d)) throw Engine.Stop("Dialog Beri Hadiah bukan Yacht, tidak dikonfirmasi")
         val kb = d.lines.filter { it.norm == "konfirmasi" && it.cy > d.h * 0.60f }.firstOrNull() ?: d.find("konfirmasi") ?: throw Engine.Stop("Tombol Konfirmasi hadiah tidak terbaca")
         quickTap(kb.cx, kb.cy, "Konfirmasi (kirim Yacht)")
         val after = waitFor(5000) { !it.has("berihadiah") } ?: throw Engine.Stop("Dialog Beri Hadiah belum tertutup setelah Konfirmasi")
