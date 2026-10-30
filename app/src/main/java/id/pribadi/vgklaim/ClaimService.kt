@@ -20,6 +20,7 @@ import android.view.Gravity
 import android.view.WindowManager
 import android.widget.TextView
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityWindowInfo
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -265,6 +266,15 @@ class ClaimService : AccessibilityService() {
 
 
     // Mengisi kotak teks yang sedang fokus (kotak ID). Mengembalikan "OK" kalau berhasil, selain itu keterangan untuk log.
+    // Apakah papan ketik (jendela IME) sedang tampil
+    fun keyboardVisible(): Boolean {
+        return try {
+            windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+        } catch (e: Throwable) {
+            false
+        }
+    }
+
     fun inputText(text: String): String {
         val info = StringBuilder()
         try {
