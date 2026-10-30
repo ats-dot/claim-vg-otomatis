@@ -346,6 +346,8 @@ class MainActivity : Activity() {
     private var tvSvc: TextView? = null
     private var tvBat: TextView? = null
     private var tvAuto: TextView? = null
+    private var tvNotif: TextView? = null
+    private var focusSink: View? = null
     private var lastLog = ""
 
     // Pager antar tab
@@ -376,7 +378,43 @@ class MainActivity : Activity() {
         Prefs.init(applicationContext)
         Matcher.reload(applicationContext)
         AutoAccess.ensure(applicationContext)
+        // Papan ketik tidak muncul sendiri saat aplikasi dibuka atau dibuka lagi (hanya saat kotak diketuk)
+        window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        askNotif()
         render()
+    }
+
+    // Izin notifikasi (Android 13 ke atas) diminta begitu aplikasi dibuka. Sistem hanya menampilkan dialognya kalau izin belum
+    // diberikan dan belum ditolak permanen; kalau sudah ditolak permanen, ketuk baris Notifikasi di Pengaturan
+    private fun askNotif() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 11)
+        }
+    }
+
+    // Tutup papan ketik dan lepaskan fokus dari kotak isian, supaya papan ketik tidak muncul lagi sendiri
+    private fun hideKeyboard() {
+        try {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.hideSoftInputFromWindow(window.decorView.windowToken, 0)
+            currentFocus?.clearFocus()
+            focusSink?.requestFocus()
+        } catch (e: Throwable) {
+        }
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            val f = currentFocus
+            if (f is EditText) {
+                val r = Rect()
+                f.getGlobalVisibleRect(r)
+                if (!r.contains(ev.rawX.toInt(), ev.rawY.toInt())) hideKeyboard()
+            }
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onResume() {
@@ -386,6 +424,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        hideKeyboard()
         super.onPause()
         h.removeCallbacks(ticker)
     }
@@ -526,6 +565,11 @@ class MainActivity : Activity() {
         e.textSize = 17f
         e.inputType = InputType.TYPE_CLASS_NUMBER
         e.setSingleLine(true)
+        e.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+        e.setOnEditorActionListener { _, _, _ ->
+            hideKeyboard()
+            true
+        }
         e.background = inputBg()
         e.setPadding(dp(8), 0, dp(8), 0)
         e.layoutParams = LinearLayout.LayoutParams(dp(96), dp(44))
@@ -777,7 +821,7 @@ class MainActivity : Activity() {
         val dockW = Math.min(resources.displayMetrics.widthPixels - dp(36), dp(400))
         dockBtnW = (dockW - dp(12)) / 3
         val dock = FrameLayout(this)
-        dock.background = GlassDrawable(dp(35).toFloat(), dp(1).toFloat(), Color.argb(224, 16, 17, 21))
+        dock.background = GlassDrawable(dp(35).toFloat(), dp(1).toFloat(), Color.argb(250, 12, 13, 17))
         val th = View(this)
         val tg = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(Color.argb(46, 255, 255, 255), Color.argb(15, 255, 255, 255)))
         tg.cornerRadius = dp(29).toFloat()
@@ -839,6 +883,7 @@ class MainActivity : Activity() {
         tvSvc = null
         tvBat = null
         tvAuto = null
+        tvNotif = null
         lastFracC = -1f
         lastFracB = -1f
         posAnim?.cancel()
@@ -846,6 +891,10 @@ class MainActivity : Activity() {
 
         val root = FrameLayout(this)
         root.setBackgroundColor(C_BG)
+        // Root memegang fokus supaya tidak ada kotak isian yang otomatis terfokus (papan ketik muncul sendiri)
+        root.isFocusable = true
+        root.isFocusableInTouchMode = true
+        focusSink = root
         root.addView(BackdropView(this), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         if (help) {
@@ -890,6 +939,7 @@ class MainActivity : Activity() {
             dock.visibility = if (sh - r.bottom > sh * 0.15f) View.GONE else View.VISIBLE
         }
         setContentView(root)
+        root.requestFocus()
         tick()
     }
 
@@ -983,19 +1033,33 @@ class MainActivity : Activity() {
 
     // Mulai proses: nyalakan Aksesibilitas otomatis bila izin sudah diberikan, lalu jalankan
     private fun begin(mode: Int, okMsg: String) {
-        if (android.os.Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 11)
-        }
+        hideKeyboard()
+        askNotif()
         val changed = AutoAccess.ensure(applicationContext)
         val go = {
             val r = if (mode == 1) Engine.start(applicationContext, 1) else Engine.start(applicationContext)
             toast(r ?: okMsg)
         }
-        if (changed) {
+        // Kalau Aksesibilitas baru dinyalakan (atau sedang tersambung), tunggu sampai layanan benar-benar tersambung, maksimal 10 detik.
+        // Begitu tersambung, langsung jalan
+        if (changed || (ClaimService.inst == null && AutoAccess.granted(applicationContext))) {
             toast("Menyalakan Aksesibilitas...")
-            h.postDelayed({ go() }, 1300)
+            var waited = 0
+            val poll = object : Runnable {
+                override fun run() {
+                    if (ClaimService.inst != null) {
+                        go()
+                        return
+                    }
+                    waited += 100
+                    if (waited >= 10000) {
+                        toast("Aksesibilitas belum tersambung, coba lagi")
+                        return
+                    }
+                    h.postDelayed(this, 100)
+                }
+            }
+            h.postDelayed(poll, 100)
         } else {
             go()
         }
@@ -1011,6 +1075,11 @@ class MainActivity : Activity() {
         e.textSize = 17f
         e.inputType = if (numeric) InputType.TYPE_CLASS_NUMBER else InputType.TYPE_CLASS_TEXT
         e.setSingleLine(true)
+        e.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+        e.setOnEditorActionListener { _, _, _ ->
+            hideKeyboard()
+            true
+        }
         e.background = inputBg()
         e.setPadding(dp(8), 0, dp(8), 0)
         e.layoutParams = LinearLayout.LayoutParams(dp(180), dp(44))
@@ -1159,6 +1228,8 @@ class MainActivity : Activity() {
         tvBat = bat
         val auto = tv("", 15f, false, C_MUT)
         tvAuto = auto
+        val notif = tv("", 15f, false, C_MUT)
+        tvNotif = notif
         col.addView(
             section(
                 "Izin",
@@ -1166,6 +1237,16 @@ class MainActivity : Activity() {
                     linkRow("Aksesibilitas", svc) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
                     divider(),
                     linkRow("Nyala otomatis", auto) { showAutoInfo() },
+                    divider(),
+                    linkRow("Notifikasi", notif) {
+                        try {
+                            val i = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            i.putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                            startActivity(i)
+                        } catch (e: Exception) {
+                            toast("Tidak bisa dibuka: " + e.javaClass.simpleName)
+                        }
+                    },
                     divider(),
                     linkRow("Baterai", bat) {
                         try {
@@ -1518,6 +1599,8 @@ class MainActivity : Activity() {
     private val helpItems = listOf(
         "Aksesibilitas" to "Layanan yang dipakai untuk screenshot dan ketukan. Harus aktif. Nyalakan lagi setelah memasang pembaruan, atau pakai Nyala otomatis.",
         "Nyala otomatis" to "Kalau izin WRITE_SECURE_SETTINGS sudah diberikan satu kali lewat Shizuku atau ADB, aplikasi menyalakan Aksesibilitasnya sendiri tiap dibuka dan saat Mulai ditekan. Ketuk barisnya untuk melihat dan menyalin perintahnya. Izin bertahan sampai aplikasi di-uninstall.",
+        "Notifikasi" to "Izin notifikasi diminta saat aplikasi pertama dibuka. Kalau pernah ditolak, ketuk barisnya untuk membuka pengaturan notifikasi aplikasi dan mengizinkannya. Tanpa izin ini, notifikasi berjalan dan tombol Berhenti di notifikasi tidak tampil.",
+        "Papan ketik" to "Papan ketik ditutup dan fokus dilepas dari kotak isian saat tombol Selesai di papan ketik ditekan, saat layar di luar kotak diketuk, saat Mulai ditekan, dan saat aplikasi ditinggalkan. Papan ketik tidak muncul sendiri saat aplikasi dibuka lagi.",
         "Baterai" to "Atur ke tanpa batasan supaya sistem tidak membatasi kecepatan baca layar.",
         "Aplikasi game" to "Pilih aplikasi Mobile Legends yang dibuka bot.",
         "Jumlah server" to "Isi jumlah semua server akun ini, termasuk server yang sedang dipakai (awalnya 20). Wajib diisi. Bot terus mencari sampai semua server terlihat, dan tidak berhenti sebelum itu.",
@@ -1624,6 +1707,16 @@ class MainActivity : Activity() {
                 au.text = "Perlu izin"
                 au.setTextColor(C_MUT)
             }
+        }
+        val nn = tvNotif
+        if (nn != null) {
+            val on = try {
+                (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager).areNotificationsEnabled()
+            } catch (e: Exception) {
+                true
+            }
+            nn.text = if (on) "Diizinkan" else "Belum diizinkan"
+            nn.setTextColor(if (on) C_ACC else C_MUT)
         }
         val bt = tvBat
         if (bt != null) {

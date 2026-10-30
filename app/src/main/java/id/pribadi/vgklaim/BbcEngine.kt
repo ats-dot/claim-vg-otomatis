@@ -608,6 +608,8 @@ object BbcEngine {
         // langsung keluar tanpa menunggu popup kedua (kadang memang tidak muncul)
         var okTapped = false
         var closed = 0
+        var okAt = 0L
+        var xAt = 0L
         var lastAct = now()
         var first = true
         val tEnd = now() + 10000
@@ -616,13 +618,24 @@ object BbcEngine {
             val s2 = if (first) res else cap()
             first = false
             if (s2.has("memperolehhadiah")) {
+                // OK diketuk SEKALI; popup butuh waktu untuk hilang, jadi ketuk lagi hanya kalau masih terlihat setelah 1,2 detik
+                if (okTapped && now() - okAt < 1200L) {
+                    sleepMs(60)
+                    continue
+                }
                 val o2 = Engine.okBtn(s2)
                 quickTap(o2?.cx ?: (s2.w * 0.5f), o2?.cy ?: (s2.h * 0.893f), "OK (Memperoleh Hadiah)")
                 okTapped = true
+                okAt = now()
                 lastAct = now()
             } else if (s2.has("pilihhadiah", "topupsekarang", "skindeluxe")) {
+                if (closed > 0 && now() - xAt < 1000L) {
+                    sleepMs(60)
+                    continue
+                }
                 quickTap(s2.w * 0.858f, s2.h * 0.076f, "tutup X (popup Top Up)")
                 closed++
+                xAt = now()
                 lastAct = now()
             } else if ((okTapped || closed >= 1) && isTopUp(s2)) {
                 break
