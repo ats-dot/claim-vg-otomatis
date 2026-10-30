@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
 
     <queries>
@@ -18,7 +19,7 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
-        android:label="VG Klaim"
+        android:label="Klaim &amp; Kirim"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
@@ -42,7 +43,7 @@
         <service
             android:name=".ClaimService"
             android:exported="true"
-            android:label="VG Klaim"
+            android:label="Klaim &amp; Kirim"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
