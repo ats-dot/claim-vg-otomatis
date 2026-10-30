@@ -668,7 +668,18 @@ object BbcEngine {
         openFromLobby(0.893f, 0.679f, "ikon orang + (tambah teman)", { it.has("tambahkanteman") }, "Dialog Tambahkan Teman tidak terbuka", s)
     }
 
+    // Isi ID, tutup papan ketik dengan OK (Back membatalkan isian), lalu pastikan ID benar-benar tampil di kotak
+    // sebelum Cari ID diketuk. Kalau tidak tampil, isi ulang sekali; kalau tetap tidak, berhenti (jangan cari kosong)
     private fun typeId(id: String) {
+        for (round in 0 until 2) {
+            fillId(id)
+            if (waitFor(1800) { it.all.contains(id.take(7)) } != null) return
+            log("ID belum terlihat di kotak pencarian, mengisi ulang")
+        }
+        throw Engine.Stop("ID tidak terisi di kotak pencarian. Pencarian dibatalkan")
+    }
+
+    private fun fillId(id: String) {
         val s0 = cap()
         val box = s0.lines.firstOrNull { it.norm.contains("ketukuntuk") }
         quickTap(box?.cx ?: (s0.w * 0.298f), box?.cy ?: (s0.h * 0.222f), "kotak ID")
@@ -690,7 +701,7 @@ object BbcEngine {
         }
         log("Isi ID lewat Aksesibilitas: " + r)
         if (r == "OK") {
-            closeKeyboardBack(svc)
+            commitKeyboard(svc)
             return
         }
         log("Pengisian otomatis gagal, mengetik lewat tombol angka papan ketik")
@@ -713,15 +724,22 @@ object BbcEngine {
         return (digits && digitKeys(s) != null) || s.has("bahasaindonesia") || (s.has("indonesia") && (s.has("tambahkanteman") || s.has("cariid")))
     }
 
-    // Tutup papan ketik dengan Back, hanya kalau papan ketik memang tampil (tanpa papan ketik, Back bisa menutup dialog).
-    // Kalau dua kali Back belum menutup, cadangannya ketuk OK di bilah isian
-    private fun closeKeyboardBack(svc: ClaimService) {
-        for (attempt in 0 until 2) {
+    // Simpan isian dan tutup papan ketik dengan tombol OK di bilah isian. Back TIDAK dipakai di sini karena membatalkan isian
+    // (ID terhapus). Back hanya cadangan terakhir kalau tombol OK tidak pernah terbaca
+    private fun commitKeyboard(svc: ClaimService) {
+        for (attempt in 0 until 3) {
             Engine.alive()
             val s = cap()
             if (!keyboardUp(svc, s)) return
-            log("Ketuk: Back (tutup papan ketik)")
-            Engine.back()
+            val ok = s.lines.firstOrNull { (it.norm == "oke" || it.norm == "ok" || it.norm == "selesai") && it.cx > s.w * 0.80f && it.cy < s.h * 0.45f }
+            if (ok != null) {
+                tapLine(ok, "OKE (selesai mengisi ID)")
+            } else if (attempt == 2) {
+                log("Tombol OK tidak terbaca, menutup papan ketik dengan Back")
+                Engine.back()
+            } else {
+                sleepMs(300)
+            }
             val t0 = now()
             while (now() - t0 < 1500) {
                 Engine.alive()
@@ -729,7 +747,6 @@ object BbcEngine {
                 sleepMs(80)
             }
         }
-        pressOke()
     }
 
     private fun pressOke() {
